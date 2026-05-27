@@ -1,4 +1,4 @@
-import type { ShapeInstance, ShapeType } from "../store/sceneStore";
+import type { CsgNode, SceneObject, ShapeType, OpType } from "../store/sceneStore";
 
 function fmtFloat(n: number): string {
   const s = parseFloat(n.toFixed(6)).toString();
@@ -15,7 +15,7 @@ function vec2(x: number, y: number, prefix: "d." | ""): string {
   return `${prefix}vec2f(${f(x)}, ${f(y)})`;
 }
 
-// ── TypeGPU helper sources ────────────────────────────────────────────────────
+// ── Shape SDF helper sources ──────────────────────────────────────────────────
 
 const TG_HELPERS: Record<ShapeType, string> = {
   sphere: `const sdSphere = (p: d.v3f, R: number): number => {
@@ -61,8 +61,6 @@ const TG_HELPERS: Record<ShapeType, string> = {
 };`,
 };
 
-// ── WGSL helper sources ───────────────────────────────────────────────────────
-
 const WGSL_HELPERS: Record<ShapeType, string> = {
   sphere: `fn sdSphere(p: vec3f, R: f32) -> f32 {
   return length(p) - R;
@@ -98,46 +96,148 @@ const WGSL_HELPERS: Record<ShapeType, string> = {
 }`,
 };
 
-// ── Per-shape call-site generators ────────────────────────────────────────────
+// ── Rotation helpers ──────────────────────────────────────────────────────────
 
-function tgCall(shape: ShapeInstance): string {
-  const [px, py, pz] = shape.position;
-  const [p0, p1, p2] = shape.params;
-  const pos = vec3(px, py, pz, "d.");
-  switch (shape.type) {
+const TG_ROTATION_HELPER = `const applyInvRotXYZ = (lp: d.v3f, rot: d.v3f): d.v3f => {
+  "use gpu";
+  const czn = std.cos(-rot.z); const szn = std.sin(-rot.z);
+  const p1 = d.vec3f(czn * lp.x - szn * lp.y, szn * lp.x + czn * lp.y, lp.z);
+  const cyn = std.cos(-rot.y); const syn = std.sin(-rot.y);
+  const p2 = d.vec3f(cyn * p1.x + syn * p1.z, p1.y, -syn * p1.x + cyn * p1.z);
+  const cxn = std.cos(-rot.x); const sxn = std.sin(-rot.x);
+  return d.vec3f(p2.x, cxn * p2.y - sxn * p2.z, sxn * p2.y + cxn * p2.z);
+};`;
+
+const WGSL_ROTATION_HELPER = `fn applyInvRotXYZ(lp: vec3f, rot: vec3f) -> vec3f {
+  let czn = cos(-rot.z); let szn = sin(-rot.z);
+  let p1 = vec3f(czn * lp.x - szn * lp.y, szn * lp.x + czn * lp.y, lp.z);
+  let cyn = cos(-rot.y); let syn = sin(-rot.y);
+  let p2 = vec3f(cyn * p1.x + syn * p1.z, p1.y, -syn * p1.x + cyn * p1.z);
+  let cxn = cos(-rot.x); let sxn = sin(-rot.x);
+  return vec3f(p2.x, cxn * p2.y - sxn * p2.z, sxn * p2.y + cxn * p2.z);
+}`;
+
+// ── CSG operation helpers ─────────────────────────────────────────────────────
+
+const TG_SMIN = `const smin = (a: number, b: number, k: number): number => {
+  "use gpu";
+  const h = std.clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return std.mix(b, a, h) - k * h * (1.0 - h);
+};`;
+
+const WGSL_SMIN = `fn smin(a: f32, b: f32, k: f32) -> f32 {
+  let h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}`;
+
+// ── Recursive expression generators ──────────────────────────────────────────
+
+function collectShapeTypes(node: CsgNode, out: Set<ShapeType>): void {
+  if (node.kind === "shape") {
+    out.add(node.shapeType);
+    return;
+  }
+  collectShapeTypes(node.left, out);
+  collectShapeTypes(node.right, out);
+}
+
+function collectUsesRotation(node: CsgNode): boolean {
+  if (node.kind === "shape") {
+    return node.rotation.some((a) => Math.abs(a) > 1e-9);
+  }
+  return collectUsesRotation(node.left) || collectUsesRotation(node.right);
+}
+
+function needsSmin(node: CsgNode): boolean {
+  if (node.kind === "shape") return false;
+  if (["sUnion", "sSubtract", "sIntersect"].includes(node.op)) return true;
+  return needsSmin(node.left) || needsSmin(node.right);
+}
+
+function tgShapeExpr(node: CsgNode & { kind: "shape" }, prefix: string): string {
+  const pos = vec3(...node.position, "d.");
+  const [p0, p1, p2] = node.params;
+  const DEG_TO_RAD = Math.PI / 180;
+  const hasRotation = node.rotation.some((a) => Math.abs(a) > 1e-9);
+  const lp = hasRotation
+    ? `applyInvRotXYZ(p - ${pos}, ${vec3(node.rotation[0] * DEG_TO_RAD, node.rotation[1] * DEG_TO_RAD, node.rotation[2] * DEG_TO_RAD, "d.")})`
+    : `p - ${pos}`;
+  switch (node.shapeType) {
     case "sphere":
-      return `  dist = std.min(dist, sdSphere(p - ${pos}, ${fmtFloat(p0)}));`;
+      return `sdSphere(${lp}, ${fmtFloat(p0)})`;
     case "box":
-      return `  dist = std.min(dist, sdBox(p - ${pos}, ${vec3(p0, p1, p2, "d.")}));`;
+      return `sdBox(${lp}, ${vec3(p0, p1, p2, "d.")})`;
     case "torus":
-      return `  dist = std.min(dist, sdTorus(p - ${pos}, ${vec2(p0, p1, "d.")}));`;
+      return `sdTorus(${lp}, ${vec2(p0, p1, "d.")})`;
     case "cylinder":
-      return `  dist = std.min(dist, sdCylinder(p - ${pos}, ${fmtFloat(p0)}, ${fmtFloat(p1)}));`;
+      return `sdCylinder(${lp}, ${fmtFloat(p0)}, ${fmtFloat(p1)})`;
     case "capsule":
-      return `  dist = std.min(dist, sdCapsule(p - ${pos}, ${fmtFloat(p0)}, ${fmtFloat(p1)}));`;
+      return `sdCapsule(${lp}, ${fmtFloat(p0)}, ${fmtFloat(p1)})`;
     case "cone":
-      return `  dist = std.min(dist, sdCone(p - ${pos}, ${fmtFloat(p0)}, ${fmtFloat(p1)}));`;
+      return `sdCone(${lp}, ${fmtFloat(p0)}, ${fmtFloat(p1)})`;
+  }
+  return prefix; // unreachable
+}
+
+function tgOpExpr(op: OpType, a: string, b: string, k: number): string {
+  switch (op) {
+    case "union":     return `std.min(${a}, ${b})`;
+    case "subtract":  return `std.max(${a}, -(${b}))`;
+    case "intersect": return `std.max(${a}, ${b})`;
+    case "sUnion":    return `smin(${a}, ${b}, ${fmtFloat(k)})`;
+    case "sSubtract": return `-smin(-(${a}), ${b}, ${fmtFloat(k)})`;
+    case "sIntersect":return `-smin(-(${a}), -(${b}), ${fmtFloat(k)})`;
   }
 }
 
-function wgslCall(shape: ShapeInstance): string {
-  const [px, py, pz] = shape.position;
-  const [p0, p1, p2] = shape.params;
-  const pos = vec3(px, py, pz, "");
-  switch (shape.type) {
+function tgNodeExpr(node: CsgNode): string {
+  if (node.kind === "shape") return tgShapeExpr(node, "");
+  const a = tgNodeExpr(node.left);
+  const b = tgNodeExpr(node.right);
+  return tgOpExpr(node.op, a, b, node.smoothK);
+}
+
+function wgslShapeExpr(node: CsgNode & { kind: "shape" }): string {
+  const pos = vec3(...node.position, "");
+  const [p0, p1, p2] = node.params;
+  const DEG_TO_RAD = Math.PI / 180;
+  const hasRotation = node.rotation.some((a) => Math.abs(a) > 1e-9);
+  const lp = hasRotation
+    ? `applyInvRotXYZ(p - ${pos}, ${vec3(node.rotation[0] * DEG_TO_RAD, node.rotation[1] * DEG_TO_RAD, node.rotation[2] * DEG_TO_RAD, "")})`
+    : `p - ${pos}`;
+  switch (node.shapeType) {
     case "sphere":
-      return `  dist = min(dist, sdSphere(p - ${pos}, ${fmtFloat(p0)}));`;
+      return `sdSphere(${lp}, ${fmtFloat(p0)})`;
     case "box":
-      return `  dist = min(dist, sdBox(p - ${pos}, ${vec3(p0, p1, p2, "")}));`;
+      return `sdBox(${lp}, ${vec3(p0, p1, p2, "")})`;
     case "torus":
-      return `  dist = min(dist, sdTorus(p - ${pos}, ${vec2(p0, p1, "")}));`;
+      return `sdTorus(${lp}, ${vec2(p0, p1, "")})`;
     case "cylinder":
-      return `  dist = min(dist, sdCylinder(p - ${pos}, ${fmtFloat(p0)}, ${fmtFloat(p1)}));`;
+      return `sdCylinder(${lp}, ${fmtFloat(p0)}, ${fmtFloat(p1)})`;
     case "capsule":
-      return `  dist = min(dist, sdCapsule(p - ${pos}, ${fmtFloat(p0)}, ${fmtFloat(p1)}));`;
+      return `sdCapsule(${lp}, ${fmtFloat(p0)}, ${fmtFloat(p1)})`;
     case "cone":
-      return `  dist = min(dist, sdCone(p - ${pos}, ${fmtFloat(p0)}, ${fmtFloat(p1)}));`;
+      return `sdCone(${lp}, ${fmtFloat(p0)}, ${fmtFloat(p1)})`;
   }
+  return "";
+}
+
+function wgslOpExpr(op: OpType, a: string, b: string, k: number): string {
+  switch (op) {
+    case "union":     return `min(${a}, ${b})`;
+    case "subtract":  return `max(${a}, -(${b}))`;
+    case "intersect": return `max(${a}, ${b})`;
+    case "sUnion":    return `smin(${a}, ${b}, ${fmtFloat(k)})`;
+    case "sSubtract": return `-smin(-(${a}), ${b}, ${fmtFloat(k)})`;
+    case "sIntersect":return `-smin(-(${a}), -(${b}), ${fmtFloat(k)})`;
+  }
+}
+
+function wgslNodeExpr(node: CsgNode): string {
+  if (node.kind === "shape") return wgslShapeExpr(node);
+  const a = wgslNodeExpr(node.left);
+  const b = wgslNodeExpr(node.right);
+  return wgslOpExpr(node.op, a, b, node.smoothK);
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
@@ -147,22 +247,66 @@ export interface GeneratedCode {
   wgsl: string;
 }
 
-const PLACEHOLDER = "// Add shapes to generate code";
+const PLACEHOLDER = "// Add objects with shapes to generate code";
 
-export function generateSdScene(shapes: ShapeInstance[]): GeneratedCode {
-  if (shapes.length === 0) {
+export function generateSdScene(objects: SceneObject[]): GeneratedCode {
+  const activeObjects = objects.filter((o) => o.root !== null);
+  if (activeObjects.length === 0) {
     return { typegpu: PLACEHOLDER, wgsl: PLACEHOLDER };
   }
 
-  const usedTypes = [...new Set(shapes.map((s) => s.type))] as ShapeType[];
+  // Collect used shape types and whether smooth ops / rotation are used
+  const usedTypes = new Set<ShapeType>();
+  let usesSmin = false;
+  let usesRotation = false;
+  for (const obj of activeObjects) {
+    if (obj.root) {
+      collectShapeTypes(obj.root, usedTypes);
+      if (needsSmin(obj.root)) usesSmin = true;
+      if (collectUsesRotation(obj.root)) usesRotation = true;
+    }
+  }
 
-  const tgHelpers = usedTypes.map((t) => TG_HELPERS[t]).join("\n\n");
-  const tgCalls = shapes.map(tgCall).join("\n");
-  const typegpu = `${tgHelpers}\n\nconst sdScene = (p: d.v3f): number => {\n  "use gpu";\n  let dist = d.f32(1e10);\n${tgCalls}\n  return dist;\n};`;
+  // TypeGPU output
+  const tgHelpers = [...usedTypes].map((t) => TG_HELPERS[t]).join("\n\n");
+  const tgSmin = usesSmin ? "\n\n" + TG_SMIN : "";
+  const tgRotation = usesRotation ? "\n\n" + TG_ROTATION_HELPER : "";
 
-  const wgslHelpers = usedTypes.map((t) => WGSL_HELPERS[t]).join("\n\n");
-  const wgslCalls = shapes.map(wgslCall).join("\n");
-  const wgsl = `${wgslHelpers}\n\nfn sdScene(p: vec3f) -> f32 {\n  var dist: f32 = 1e10;\n${wgslCalls}\n  return dist;\n}`;
+  // One function per object, then a combined sdScene
+  const tgObjectFns = activeObjects
+    .map((obj, i) => {
+      const expr = tgNodeExpr(obj.root!);
+      return `const sdObject${i} = (p: d.v3f): number => {\n  "use gpu";\n  return ${expr};\n};`;
+    })
+    .join("\n\n");
+
+  const tgSceneCalls = activeObjects
+    .map((_, i) => `  dist = std.min(dist, sdObject${i}(p));`)
+    .join("\n");
+
+  const typegpu =
+    `${tgHelpers}${tgSmin}${tgRotation}\n\n${tgObjectFns}\n\n` +
+    `const sdScene = (p: d.v3f): number => {\n  "use gpu";\n  let dist = d.f32(1e10);\n${tgSceneCalls}\n  return dist;\n};`;
+
+  // WGSL output
+  const wgslHelpers = [...usedTypes].map((t) => WGSL_HELPERS[t]).join("\n\n");
+  const wgslSmin = usesSmin ? "\n\n" + WGSL_SMIN : "";
+  const wgslRotation = usesRotation ? "\n\n" + WGSL_ROTATION_HELPER : "";
+
+  const wgslObjectFns = activeObjects
+    .map((obj, i) => {
+      const expr = wgslNodeExpr(obj.root!);
+      return `fn sdObject${i}(p: vec3f) -> f32 {\n  return ${expr};\n}`;
+    })
+    .join("\n\n");
+
+  const wgslSceneCalls = activeObjects
+    .map((_, i) => `  dist = min(dist, sdObject${i}(p));`)
+    .join("\n");
+
+  const wgsl =
+    `${wgslHelpers}${wgslSmin}${wgslRotation}\n\n${wgslObjectFns}\n\n` +
+    `fn sdScene(p: vec3f) -> f32 {\n  var dist: f32 = 1e10;\n${wgslSceneCalls}\n  return dist;\n}`;
 
   return { typegpu, wgsl };
 }

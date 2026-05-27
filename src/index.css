@@ -144,8 +144,8 @@ canvas {
   top: 50%;
   transform: translateY(-50%);
   left: 12px;
-  width: 220px;
-  height: 60vh;
+  width: 230px;
+  max-height: 70vh;
   display: flex;
   flex-direction: column;
 }
@@ -408,6 +408,154 @@ canvas {
 .code-pre::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.12);
   border-radius: 2px;
+}
+
+/* ─── Scene object (left panel tree nodes) ───────────────────── */
+
+.scene-object {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.scene-object-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px 7px 10px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.scene-object-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.scene-object-header.scene-item--selected {
+  background: rgba(99, 102, 241, 0.12);
+  border-left-color: #6366f1;
+}
+
+.scene-object-collapse {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: none;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: color 0.1s;
+}
+
+.scene-object-collapse:hover {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.scene-object-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c8ccd6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+
+.scene-object-nodes {
+  padding-bottom: 4px;
+}
+
+.scene-object-empty {
+  padding: 6px 14px 8px 28px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.2);
+  font-style: italic;
+}
+
+/* Op node row — slightly dimmer than shape rows */
+.scene-item--op {
+  opacity: 0.75;
+}
+
+.scene-item--op:hover {
+  opacity: 1;
+}
+
+.scene-item--op.scene-item--selected {
+  opacity: 1;
+  background: rgba(139, 92, 246, 0.12);
+  border-left-color: #8b5cf6;
+}
+
+.scene-item-icon--op {
+  font-size: 12px;
+  opacity: 0.9;
+  color: #a78bfa;
+}
+
+.scene-item-name--op {
+  font-size: 11px;
+  color: #a78bfa;
+}
+
+/* Add object footer */
+.scene-add-object {
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.add-object-btn {
+  width: 100%;
+  padding: 6px 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.add-object-btn:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #e0e2ff;
+  border-style: solid;
+}
+
+.add-object-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Select input inside right panel */
+.prop-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,0.3)'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+  cursor: pointer;
+}
+
+.prop-select option {
+  background: #1a1c2e;
+  color: #d0d3de;
+}
+
+/* Op hint text */
+.props-op-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.28);
+  margin-top: 4px;
+  line-height: 1.5;
+  font-style: italic;
 }
 
 /* ─── No WebGPU fallback ─────────────────────────────────────── */

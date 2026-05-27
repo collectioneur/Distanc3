@@ -1,4 +1,9 @@
-import { useSceneStore, MAX_SCENE_SHAPES, type ShapeType } from "../../store/sceneStore";
+import {
+  useSceneStore,
+  MAX_NODES_PER_OBJECT,
+  countNodes,
+  type ShapeType,
+} from "../../store/sceneStore";
 
 const SHAPES: { type: ShapeType; label: string; icon: string }[] = [
   { type: "box", label: "Box", icon: "□" },
@@ -10,9 +15,22 @@ const SHAPES: { type: ShapeType; label: string; icon: string }[] = [
 ];
 
 export default function TopPanel() {
-  const addShape = useSceneStore((s) => s.addShape);
-  const shapeCount = useSceneStore((s) => s.shapes.length);
-  const isFull = shapeCount >= MAX_SCENE_SHAPES;
+  const addShapeToObject = useSceneStore((s) => s.addShapeToObject);
+  const selectedObjectId = useSceneStore((s) => s.selectedObjectId);
+  const objects = useSceneStore((s) => s.objects);
+
+  const selectedObject = objects.find((o) => o.id === selectedObjectId) ?? null;
+  const nodeCount = selectedObject?.root ? countNodes(selectedObject.root) : 0;
+  // Adding a shape creates 1 leaf + 1 op node (unless the object is empty)
+  const wouldAdd = selectedObject?.root ? 2 : 1;
+  const isFull = nodeCount + wouldAdd > MAX_NODES_PER_OBJECT;
+  const noObject = !selectedObjectId;
+
+  function getTitle(label: string): string {
+    if (noObject) return "Select or create an object first";
+    if (isFull) return `Object is full (max ${MAX_NODES_PER_OBJECT} nodes)`;
+    return `Add ${label}`;
+  }
 
   return (
     <div className="panel panel-top">
@@ -22,9 +40,11 @@ export default function TopPanel() {
           <button
             key={type}
             className="shape-btn"
-            onClick={() => addShape(type)}
-            disabled={isFull}
-            title={isFull ? "Scene is full (max 8 shapes)" : `Add ${label}`}
+            onClick={() => {
+              if (selectedObjectId) addShapeToObject(selectedObjectId, type);
+            }}
+            disabled={noObject || isFull}
+            title={getTitle(label)}
           >
             <span className="shape-btn-icon">{icon}</span>
             <span className="shape-btn-label">{label}</span>
