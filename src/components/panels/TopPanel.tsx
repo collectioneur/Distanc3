@@ -1,3 +1,4 @@
+import { useState, useRef } from "react";
 import { useStore } from "zustand";
 import {
   useSceneStore,
@@ -24,6 +25,17 @@ export default function TopPanel() {
   const objects = useSceneStore((s) => s.objects);
   const canUndo = useStore(temporalStore, (s) => s.pastStates.length > 0);
   const canRedo = useStore(temporalStore, (s) => s.futureStates.length > 0);
+
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleCopyLink() {
+    navigator.clipboard.writeText(window.location.href).then(() => {
+      setCopied(true);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 1500);
+    });
+  }
 
   const selectedObject = objects.find((o) => o.id === selectedObjectId) ?? null;
   const nodeCount = selectedObject?.root ? countNodes(selectedObject.root) : 0;
@@ -56,6 +68,13 @@ export default function TopPanel() {
           title="Redo (Cmd+Shift+Z)"
         >
           ↪
+        </button>
+        <button
+          className="history-btn"
+          onClick={handleCopyLink}
+          title="Copy share link"
+        >
+          {copied ? "✓" : "⎘"}
         </button>
       </div>
       <div className="top-panel-divider" />

@@ -6,8 +6,11 @@ import RightPanel from "./components/panels/RightPanel";
 import BottomPanel from "./components/panels/BottomPanel";
 import CodeExportPanel from "./components/panels/CodeExportPanel";
 import { undoScene, redoScene } from "./store/sceneStore";
+import { usePersistence } from "./store/persistence";
 
 export default function App() {
+  usePersistence();
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const tag = (document.activeElement as HTMLElement)?.tagName;

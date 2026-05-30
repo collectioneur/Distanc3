@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { shallow } from "zustand/shallow";
 import { temporal } from "zundo";
+import { loadInitialState } from "./persistence";
 
 export type ShapeType = "sphere" | "box" | "torus" | "cylinder" | "capsule" | "cone";
 export type OpType = "union" | "subtract" | "intersect" | "sUnion" | "sSubtract" | "sIntersect";
@@ -138,14 +139,16 @@ function updateNodeInTree(
 
 // ── Store ──────────────────────────────────────────────────────────────────────
 
+const _saved = loadInitialState();
+
 export const useSceneStore = create<SceneState>()(
   temporal(
     (set) => ({
-  objects: [],
+  objects: _saved.objects ?? [],
   selectedObjectId: null,
   selectedNodeId: null,
-  counters: { sphere: 0, box: 0, torus: 0, cylinder: 0, capsule: 0, cone: 0 },
-  objectCounter: 0,
+  counters: _saved.counters ?? { sphere: 0, box: 0, torus: 0, cylinder: 0, capsule: 0, cone: 0 },
+  objectCounter: _saved.objectCounter ?? 0,
 
   addObject: () =>
     set((state) => {
@@ -283,6 +286,10 @@ export const useSceneStore = create<SceneState>()(
 );
 
 export const temporalStore = useSceneStore.temporal;
+
+if (_saved.objects?.length) {
+  temporalStore.getState().clear();
+}
 
 export function undoScene() {
   temporalStore.getState().undo();
