@@ -57,7 +57,12 @@ function compileCsgTree(node: CsgNode, out: InstructionData[]): void {
       smoothK: 0,
       position: d.vec3f(node.position[0], node.position[1], node.position[2]),
       _pad: 0,
-      params: d.vec4f(node.params[0], node.params[1], node.params[2], node.params[3]),
+      params: d.vec4f(
+        node.params[0],
+        node.params[1],
+        node.params[2],
+        node.params[3],
+      ),
       rotation: d.vec3f(rx * DEG_TO_RAD, ry * DEG_TO_RAD, rz * DEG_TO_RAD),
       _pad2: 0,
     });
@@ -134,6 +139,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         timeUniform,
         aspectUniform,
         mouseUniform,
+        distanceUniform,
         instructionsBuffer,
         objectInfoBuffer,
         objectCountUniform,
@@ -145,6 +151,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       let dragStartY = 0;
       let rotX = 0.3;
       let rotY = -0.4;
+      let distance = 2.5;
 
       const onMouseDown = (e: MouseEvent) => {
         isDragging = true;
@@ -154,8 +161,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
 
       const onMouseMove = (e: MouseEvent) => {
         if (!isDragging) return;
-        const dx =
-          ((e.clientX - dragStartX) / window.innerWidth) * Math.PI * 2;
+        const dx = ((e.clientX - dragStartX) / window.innerWidth) * Math.PI * 2;
         const dy =
           ((e.clientY - dragStartY) / window.innerHeight) * Math.PI * 2;
         mouseUniform.write(d.vec2f(rotX + dx, rotY + dy));
@@ -168,9 +174,20 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         rotY += ((e.clientY - dragStartY) / window.innerHeight) * Math.PI * 2;
       };
 
+      const onWheel = (e: WheelEvent) => {
+        e.preventDefault();
+        const px = e.deltaMode === 1 ? e.deltaY * 10.0 : e.deltaY;
+        distance = Math.max(
+          0.5,
+          Math.min(20.0, distance * Math.exp(px * 0.0001)),
+        );
+        distanceUniform.write(distance);
+      };
+
       canvas.addEventListener("mousedown", onMouseDown);
       window.addEventListener("mousemove", onMouseMove);
       window.addEventListener("mouseup", onMouseUp);
+      canvas.addEventListener("wheel", onWheel, { passive: false });
 
       function updateSize() {
         const dpr = Math.min(window.devicePixelRatio ?? 1, 1.0);
@@ -203,8 +220,13 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         const { objects } = useSceneStore.getState();
         const renderMode = useRenderStore.getState().renderMode;
 
-        if (sceneGpuDirty || objects !== lastObjects || renderMode !== lastRenderMode) {
-          const { instructions, objectInfos, objectCount } = buildGpuData(objects);
+        if (
+          sceneGpuDirty ||
+          objects !== lastObjects ||
+          renderMode !== lastRenderMode
+        ) {
+          const { instructions, objectInfos, objectCount } =
+            buildGpuData(objects);
           instructionsBuffer.write(instructions);
           objectInfoBuffer.write(objectInfos);
           objectCountUniform.write(objectCount);
@@ -227,6 +249,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         canvas.removeEventListener("mousedown", onMouseDown);
         window.removeEventListener("mousemove", onMouseMove);
         window.removeEventListener("mouseup", onMouseUp);
+        canvas.removeEventListener("wheel", onWheel);
         root.destroy();
       };
     });

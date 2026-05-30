@@ -63,6 +63,7 @@ export function createShader(root: TgpuRoot) {
   const timeUniform = root.createUniform(d.f32, 0);
   const aspectUniform = root.createUniform(d.f32, 1);
   const mouseUniform = root.createUniform(d.vec2f, d.vec2f(0.3, -0.4));
+  const distanceUniform = root.createUniform(d.f32, 2.5);
   const objectCountUniform = root.createUniform(d.u32, 0);
   const renderModeUniform = root.createUniform(d.u32, 0);
 
@@ -332,7 +333,7 @@ export function createShader(root: TgpuRoot) {
 
     const uvn = uv * 2.0 - d.vec2f(1.0, 1.0);
     const uvCorrected = d.vec2f(uvn.x * aspectUniform.$, uvn.y);
-    let ro = d.vec3f(0, 0, -2.5);
+    let ro = d.vec3f(0, 0, 0 - distanceUniform.$);
     let rd = std.normalize(d.vec3f(uvCorrected.x, uvCorrected.y, 1.0));
 
     const rotH = rot2D(mouseUniform.$.x);
@@ -402,6 +403,7 @@ export function createShader(root: TgpuRoot) {
     timeUniform,
     aspectUniform,
     mouseUniform,
+    distanceUniform,
     instructionsBuffer,
     objectInfoBuffer,
     objectCountUniform,
