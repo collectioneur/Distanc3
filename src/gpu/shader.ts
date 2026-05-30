@@ -27,15 +27,15 @@ export const OP_TYPE_INT = {
 // Each instruction is either PUSH_SHAPE (opcode=0) or OP (opcode=1).
 // Layout: 4×u32/f32 header (16 bytes) + vec3f+pad (16 bytes) + vec4f (16 bytes) + vec3f+pad (16 bytes) = 64 bytes
 const Instruction = d.struct({
-  opcode: d.u32,      // 0 = PUSH_SHAPE, 1 = OP
-  shapeType: d.u32,   // for PUSH_SHAPE: 0-5
-  opType: d.u32,      // for OP: 0=union,1=subtract,2=intersect,3=sUnion,4=sSubtract,5=sIntersect
-  smoothK: d.f32,     // for smooth OPs
-  position: d.vec3f,  // for PUSH_SHAPE
-  _pad: d.f32,        // alignment padding after vec3f
-  params: d.vec4f,    // for PUSH_SHAPE shape parameters
-  rotation: d.vec3f,  // for PUSH_SHAPE: Euler XYZ angles in radians
-  _pad2: d.f32,       // alignment padding after vec3f
+  opcode: d.u32, // 0 = PUSH_SHAPE, 1 = OP
+  shapeType: d.u32, // for PUSH_SHAPE: 0-5
+  opType: d.u32, // for OP: 0=union,1=subtract,2=intersect,3=sUnion,4=sSubtract,5=sIntersect
+  smoothK: d.f32, // for smooth OPs
+  position: d.vec3f, // for PUSH_SHAPE
+  _pad: d.f32, // alignment padding after vec3f
+  params: d.vec4f, // for PUSH_SHAPE shape parameters
+  rotation: d.vec3f, // for PUSH_SHAPE: Euler XYZ angles in radians
+  _pad2: d.f32, // alignment padding after vec3f
 });
 
 const ObjectInfo = d.struct({
@@ -102,7 +102,9 @@ export function createShader(root: TgpuRoot) {
   const sdCylinder = (p: d.v3f, r: number, h: number): number => {
     "use gpu";
     const d2 = d.vec2f(std.length(d.vec2f(p.x, p.z)) - r, std.abs(p.y) - h);
-    return std.min(std.max(d2.x, d2.y), 0.0) + std.length(std.max(d2, d.vec2f(0.0)));
+    return (
+      std.min(std.max(d2.x, d2.y), 0.0) + std.length(std.max(d2, d.vec2f(0.0)))
+    );
   };
 
   const sdCapsule = (p: d.v3f, r: number, h: number): number => {
@@ -170,7 +172,7 @@ export function createShader(root: TgpuRoot) {
   // Polynomial smooth-min (IQ)
   const smin = (a: number, b: number, k: number): number => {
     "use gpu";
-    const h = std.clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    const h = std.clamp(0.5 + (0.5 * (b - a)) / k, 0.0, 1.0);
     return std.mix(b, a, h) - k * h * (1.0 - h);
   };
 
@@ -179,17 +181,17 @@ export function createShader(root: TgpuRoot) {
     "use gpu";
     let result = a;
     if (opType === d.u32(0)) {
-      result = std.min(a, b);         // union
+      result = std.min(a, b); // union
     } else if (opType === d.u32(1)) {
-      result = std.max(a, -b);        // subtract: a minus b
+      result = std.max(a, -b); // subtract: a minus b
     } else if (opType === d.u32(2)) {
-      result = std.max(a, b);         // intersect
+      result = std.max(a, b); // intersect
     } else if (opType === d.u32(3)) {
-      result = smin(a, b, k);         // smooth union
+      result = smin(a, b, k); // smooth union
     } else if (opType === d.u32(4)) {
-      result = -smin(-a, b, k);       // smooth subtract
+      result = -smin(-a, b, k); // smooth subtract
     } else if (opType === d.u32(5)) {
-      result = -smin(-a, -b, k);      // smooth intersect
+      result = -smin(-a, -b, k); // smooth intersect
     }
     return result;
   };
@@ -379,8 +381,7 @@ export function createShader(root: TgpuRoot) {
     const lightDir = std.normalize(d.vec3f(2.0, 3.0, -1.0));
     const diff = std.max(std.dot(N, lightDir), 0.0);
     const viewDir = d.vec3f(-rd.x, -rd.y, -rd.z);
-    const fresnel =
-      std.pow(1.0 - std.abs(std.dot(N, viewDir)), 3.0) * 0.5;
+    const fresnel = std.pow(1.0 - std.abs(std.dot(N, viewDir)), 3.0) * 0.5;
     const halfDir = std.normalize(lightDir + viewDir);
     const spec = std.pow(std.max(std.dot(N, halfDir), 0.0), 64.0) * 1.5;
     const ao = 1.0 - std.clamp(iterations / 64.0, 0.0, 1.0) * 0.4;

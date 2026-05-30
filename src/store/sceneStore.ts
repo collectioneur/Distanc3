@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { shallow } from "zustand/shallow";
+import { temporal } from "zundo";
 
 export type ShapeType = "sphere" | "box" | "torus" | "cylinder" | "capsule" | "cone";
 export type OpType = "union" | "subtract" | "intersect" | "sUnion" | "sSubtract" | "sIntersect";
@@ -136,7 +138,9 @@ function updateNodeInTree(
 
 // ── Store ──────────────────────────────────────────────────────────────────────
 
-export const useSceneStore = create<SceneState>((set) => ({
+export const useSceneStore = create<SceneState>()(
+  temporal(
+    (set) => ({
   objects: [],
   selectedObjectId: null,
   selectedNodeId: null,
@@ -265,4 +269,27 @@ export const useSceneStore = create<SceneState>((set) => ({
 
   selectNodeInObject: (objectId, nodeId) =>
     set({ selectedObjectId: objectId, selectedNodeId: nodeId }),
-}));
+    }),
+    {
+      partialize: (state) => ({
+        objects: state.objects,
+        counters: state.counters,
+        objectCounter: state.objectCounter,
+      }),
+      equality: shallow,
+      limit: 100,
+    },
+  ),
+);
+
+export const temporalStore = useSceneStore.temporal;
+
+export function undoScene() {
+  temporalStore.getState().undo();
+  useSceneStore.setState({ selectedObjectId: null, selectedNodeId: null });
+}
+
+export function redoScene() {
+  temporalStore.getState().redo();
+  useSceneStore.setState({ selectedObjectId: null, selectedNodeId: null });
+}

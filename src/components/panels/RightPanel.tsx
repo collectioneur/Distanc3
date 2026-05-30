@@ -1,4 +1,4 @@
-import { useSceneStore, findNodeInTree, type OpType, type ShapeNode } from "../../store/sceneStore";
+import { useSceneStore, findNodeInTree, temporalStore, type OpType, type ShapeNode } from "../../store/sceneStore";
 
 // ── Shared numeric input ──────────────────────────────────────────────────────
 
@@ -24,6 +24,8 @@ function NumericInput({
         value={value}
         min={min}
         step={step ?? 0.1}
+        onFocus={() => temporalStore.getState().pause()}
+        onBlur={() => temporalStore.getState().resume()}
         onChange={(e) => {
           const n = parseFloat(e.target.value);
           if (!isNaN(n)) onChange(n);
@@ -99,6 +101,8 @@ function ObjectProperties() {
           className="prop-input"
           type="text"
           value={obj.name}
+          onFocus={() => temporalStore.getState().pause()}
+          onBlur={() => temporalStore.getState().resume()}
           onChange={(e) => updateObjectName(obj.id, e.target.value)}
         />
       </div>

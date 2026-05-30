@@ -1,5 +1,9 @@
+import { useStore } from "zustand";
 import {
   useSceneStore,
+  temporalStore,
+  undoScene,
+  redoScene,
   MAX_NODES_PER_OBJECT,
   countNodes,
   type ShapeType,
@@ -18,6 +22,8 @@ export default function TopPanel() {
   const addShapeToObject = useSceneStore((s) => s.addShapeToObject);
   const selectedObjectId = useSceneStore((s) => s.selectedObjectId);
   const objects = useSceneStore((s) => s.objects);
+  const canUndo = useStore(temporalStore, (s) => s.pastStates.length > 0);
+  const canRedo = useStore(temporalStore, (s) => s.futureStates.length > 0);
 
   const selectedObject = objects.find((o) => o.id === selectedObjectId) ?? null;
   const nodeCount = selectedObject?.root ? countNodes(selectedObject.root) : 0;
@@ -34,6 +40,25 @@ export default function TopPanel() {
 
   return (
     <div className="panel panel-top">
+      <div className="top-panel-history">
+        <button
+          className="history-btn"
+          onClick={undoScene}
+          disabled={!canUndo}
+          title="Undo (Cmd+Z)"
+        >
+          ↩
+        </button>
+        <button
+          className="history-btn"
+          onClick={redoScene}
+          disabled={!canRedo}
+          title="Redo (Cmd+Shift+Z)"
+        >
+          ↪
+        </button>
+      </div>
+      <div className="top-panel-divider" />
       <span className="panel-label">Shapes</span>
       <div className="top-panel-shapes">
         {SHAPES.map(({ type, label, icon }) => (
