@@ -9,6 +9,7 @@ import {
 } from "./shader";
 import {
   useSceneStore,
+  findNodeInTree,
   type CsgNode,
   type SceneObject,
 } from "../store/sceneStore";
@@ -114,6 +115,50 @@ function buildGpuData(objects: SceneObject[]): {
   return { instructions, objectInfos, objectCount };
 }
 
+function buildSelectionGpuData(
+  objects: SceneObject[],
+  selectedObjectId: string | null,
+  selectedNodeId: string | null,
+): {
+  instructions: InstructionData[];
+  count: number;
+  enabled: boolean;
+} {
+  const instructions: InstructionData[] = [];
+
+  if (!selectedObjectId || !selectedNodeId) {
+    while (instructions.length < MAX_NODES_PER_OBJECT) {
+      instructions.push(EMPTY_INSTRUCTION);
+    }
+    return { instructions, count: 0, enabled: false };
+  }
+
+  const obj = objects.find((o) => o.id === selectedObjectId);
+  if (!obj?.root) {
+    while (instructions.length < MAX_NODES_PER_OBJECT) {
+      instructions.push(EMPTY_INSTRUCTION);
+    }
+    return { instructions, count: 0, enabled: false };
+  }
+
+  const node = findNodeInTree(obj.root, selectedNodeId);
+  if (!node) {
+    while (instructions.length < MAX_NODES_PER_OBJECT) {
+      instructions.push(EMPTY_INSTRUCTION);
+    }
+    return { instructions, count: 0, enabled: false };
+  }
+
+  compileCsgTree(node, instructions);
+  const count = instructions.length;
+
+  while (instructions.length < MAX_NODES_PER_OBJECT) {
+    instructions.push(EMPTY_INSTRUCTION);
+  }
+
+  return { instructions, count, enabled: true };
+}
+
 export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -144,6 +189,9 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         objectInfoBuffer,
         objectCountUniform,
         renderModeUniform,
+        selectionInstructionsBuffer,
+        selectionCountUniform,
+        selectionEnabledUniform,
       } = createShader(root);
 
       let isDragging = false;
@@ -208,6 +256,8 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       let lastFrameTime = 0;
       let lastObjects: SceneObject[] = [];
       let lastRenderMode = -1;
+      let lastSelectedObjectId: string | null = null;
+      let lastSelectedNodeId: string | null = null;
       let sceneGpuDirty = true;
 
       function frame(now: number) {
@@ -217,13 +267,16 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         }
         lastFrameTime = now;
 
-        const { objects } = useSceneStore.getState();
+        const { objects, selectedObjectId, selectedNodeId } =
+          useSceneStore.getState();
         const renderMode = useRenderStore.getState().renderMode;
 
         if (
           sceneGpuDirty ||
           objects !== lastObjects ||
-          renderMode !== lastRenderMode
+          renderMode !== lastRenderMode ||
+          selectedObjectId !== lastSelectedObjectId ||
+          selectedNodeId !== lastSelectedNodeId
         ) {
           const { instructions, objectInfos, objectCount } =
             buildGpuData(objects);
@@ -231,8 +284,20 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           objectInfoBuffer.write(objectInfos);
           objectCountUniform.write(objectCount);
           renderModeUniform.write(renderMode);
+
+          const selection = buildSelectionGpuData(
+            objects,
+            selectedObjectId,
+            selectedNodeId,
+          );
+          selectionInstructionsBuffer.write(selection.instructions);
+          selectionCountUniform.write(selection.count);
+          selectionEnabledUniform.write(selection.enabled ? 1 : 0);
+
           lastObjects = objects;
           lastRenderMode = renderMode;
+          lastSelectedObjectId = selectedObjectId;
+          lastSelectedNodeId = selectedNodeId;
           sceneGpuDirty = false;
         }
 

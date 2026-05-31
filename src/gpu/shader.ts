@@ -59,6 +59,16 @@ const emptyInstruction = {
 
 const emptyObjectInfo = { start: 0, count: 0 };
 
+const OUTLINE_OFFSET = 0.01;
+const OUTLINE_BAND = 0.01;
+const OUTLINE_STRENGTH = 0.5;
+const OUTLINE_RIM_POWER = 1.0;
+const OUTLINE_GRAD_LO = 1.06;
+const OUTLINE_GRAD_HI = 1.45;
+const OUTLINE_EDGE_LO = 0.25;
+const OUTLINE_EDGE_HI = 0.85;
+const RAY_MISS_T = 50.0;
+
 export function createShader(root: TgpuRoot) {
   const timeUniform = root.createUniform(d.f32, 0);
   const aspectUniform = root.createUniform(d.f32, 1);
@@ -66,6 +76,8 @@ export function createShader(root: TgpuRoot) {
   const distanceUniform = root.createUniform(d.f32, 2.5);
   const objectCountUniform = root.createUniform(d.u32, 0);
   const renderModeUniform = root.createUniform(d.u32, 0);
+  const selectionEnabledUniform = root.createUniform(d.u32, 0);
+  const selectionCountUniform = root.createUniform(d.u32, 0);
 
   const instructionsBuffer = root.createReadonly(
     d.arrayOf(Instruction, TOTAL_INSTRUCTIONS),
@@ -75,6 +87,13 @@ export function createShader(root: TgpuRoot) {
   const objectInfoBuffer = root.createReadonly(
     d.arrayOf(ObjectInfo, MAX_OBJECTS),
     Array.from({ length: MAX_OBJECTS }, () => ({ ...emptyObjectInfo })),
+  );
+
+  const selectionInstructionsBuffer = root.createReadonly(
+    d.arrayOf(Instruction, MAX_NODES_PER_OBJECT),
+    Array.from({ length: MAX_NODES_PER_OBJECT }, () => ({
+      ...emptyInstruction,
+    })),
   );
 
   // ── SDF primitives ────────────────────────────────────────────────────────
@@ -134,8 +153,6 @@ export function createShader(root: TgpuRoot) {
     return s * std.sqrt(std.min(std.dot(ca, ca), std.dot(cb, cb)));
   };
 
-  // Apply inverse XYZ Euler rotation to a point.
-  // Forward rotation is R = Rz(γ)·Ry(β)·Rx(α), so the inverse is Rx(-α)·Ry(-β)·Rz(-γ).
   const applyInvRotXYZ = (lp: d.v3f, rot: d.v3f): d.v3f => {
     "use gpu";
     const czn = std.cos(-rot.z);
@@ -149,7 +166,6 @@ export function createShader(root: TgpuRoot) {
     return d.vec3f(p2.x, cxn * p2.y - sxn * p2.z, sxn * p2.y + cxn * p2.z);
   };
 
-  // Dispatch to the right SDF based on shapeType u32
   const evalShape = (lp: d.v3f, shapeType: d.u32, params: d.v4f): number => {
     "use gpu";
     let result = d.f32(1e10);
@@ -295,6 +311,142 @@ export function createShader(root: TgpuRoot) {
     return dist;
   };
 
+  // Evaluate SDF for the selected CSG subtree (single instruction sequence).
+  const sdSelection = (p: d.v3f): number => {
+    "use gpu";
+    let s0 = d.f32(0.0);
+    let s1 = d.f32(0.0);
+    let s2 = d.f32(0.0);
+    let s3 = d.f32(0.0);
+    let s4 = d.f32(0.0);
+    let s5 = d.f32(0.0);
+    let s6 = d.f32(0.0);
+    let s7 = d.f32(0.0);
+    let sp = d.u32(0);
+
+    const count = selectionCountUniform.$;
+    for (let i = d.u32(0); i < count; i += d.u32(1)) {
+      const instr = selectionInstructionsBuffer.$[i];
+
+      if (instr.opcode === d.u32(0)) {
+        const lp = applyInvRotXYZ(p - instr.position, instr.rotation);
+        const val = evalShape(lp, instr.shapeType, instr.params);
+        if (sp === d.u32(0)) s0 = val;
+        else if (sp === d.u32(1)) s1 = val;
+        else if (sp === d.u32(2)) s2 = val;
+        else if (sp === d.u32(3)) s3 = val;
+        else if (sp === d.u32(4)) s4 = val;
+        else if (sp === d.u32(5)) s5 = val;
+        else if (sp === d.u32(6)) s6 = val;
+        else s7 = val;
+        sp += d.u32(1);
+      } else {
+        sp -= d.u32(1);
+        let b = d.f32(0.0);
+        if (sp === d.u32(0)) b = s0;
+        else if (sp === d.u32(1)) b = s1;
+        else if (sp === d.u32(2)) b = s2;
+        else if (sp === d.u32(3)) b = s3;
+        else if (sp === d.u32(4)) b = s4;
+        else if (sp === d.u32(5)) b = s5;
+        else if (sp === d.u32(6)) b = s6;
+        else b = s7;
+
+        sp -= d.u32(1);
+        let a = d.f32(0.0);
+        if (sp === d.u32(0)) a = s0;
+        else if (sp === d.u32(1)) a = s1;
+        else if (sp === d.u32(2)) a = s2;
+        else if (sp === d.u32(3)) a = s3;
+        else if (sp === d.u32(4)) a = s4;
+        else if (sp === d.u32(5)) a = s5;
+        else if (sp === d.u32(6)) a = s6;
+        else a = s7;
+
+        const result = applyOp(a, b, instr.opType, instr.smoothK);
+        if (sp === d.u32(0)) s0 = result;
+        else if (sp === d.u32(1)) s1 = result;
+        else if (sp === d.u32(2)) s2 = result;
+        else if (sp === d.u32(3)) s3 = result;
+        else if (sp === d.u32(4)) s4 = result;
+        else if (sp === d.u32(5)) s5 = result;
+        else if (sp === d.u32(6)) s6 = result;
+        else s7 = result;
+        sp += d.u32(1);
+      }
+    }
+
+    return s0;
+  };
+
+  // Raymarch a thin inflated shell around the selected subtree (sdSelection = OUTLINE_OFFSET).
+  const rayMarchSelectionOutline = (ro: d.v3f, rd: d.v3f): number => {
+    "use gpu";
+    let t = d.f32(0.0);
+    for (let i = d.f32(0.0); i < d.f32(48.0); i += d.f32(1.0)) {
+      const p = ro + rd * t;
+      const dSel = sdSelection(p);
+      const dist = std.abs(dSel - OUTLINE_OFFSET) - OUTLINE_BAND;
+      t += dist;
+      if (dist < 0.0001 || t > 100.0) {
+        break;
+      }
+    }
+    return t;
+  };
+
+  const selectionGradMag = (p: d.v3f): number => {
+    "use gpu";
+    const e = 0.001;
+    const dx =
+      sdSelection(p + d.vec3f(e, 0.0, 0.0)) -
+      sdSelection(p - d.vec3f(e, 0.0, 0.0));
+    const dy =
+      sdSelection(p + d.vec3f(0.0, e, 0.0)) -
+      sdSelection(p - d.vec3f(0.0, e, 0.0));
+    const dz =
+      sdSelection(p + d.vec3f(0.0, 0.0, e)) -
+      sdSelection(p - d.vec3f(0.0, 0.0, e));
+    return std.length(d.vec3f(dx, dy, dz)) / (2.0 * e);
+  };
+
+  const calcSelectionNormal = (p: d.v3f): d.v3f => {
+    "use gpu";
+    const e = 0.001;
+    const dx =
+      sdSelection(p + d.vec3f(e, 0.0, 0.0)) -
+      sdSelection(p - d.vec3f(e, 0.0, 0.0));
+    const dy =
+      sdSelection(p + d.vec3f(0.0, e, 0.0)) -
+      sdSelection(p - d.vec3f(0.0, e, 0.0));
+    const dz =
+      sdSelection(p + d.vec3f(0.0, 0.0, e)) -
+      sdSelection(p - d.vec3f(0.0, 0.0, e));
+    return std.normalize(d.vec3f(dx, dy, dz));
+  };
+
+  // Silhouette rim + geometric creases — thin line, not a filled shell.
+  const selectionOutlineMask = (p: d.v3f, rd: d.v3f): number => {
+    "use gpu";
+    const viewDir = std.normalize(d.vec3f(-rd.x, -rd.y, -rd.z));
+    const N = calcSelectionNormal(p);
+    const rim = std.pow(1.0 - std.abs(std.dot(N, viewDir)), OUTLINE_RIM_POWER);
+    const gradEdge = std.smoothstep(
+      OUTLINE_GRAD_LO,
+      OUTLINE_GRAD_HI,
+      selectionGradMag(p),
+    );
+    const edge = std.max(rim, gradEdge);
+    return std.smoothstep(OUTLINE_EDGE_LO, OUTLINE_EDGE_HI, edge);
+  };
+
+  const selectionOutlineColor = (): d.v3f => {
+    "use gpu";
+    const pulse = 0.75 + 0.25 * std.sin(timeUniform.$ * 2.5);
+    const v = pulse * OUTLINE_STRENGTH;
+    return d.vec3f(v, v, v);
+  };
+
   const calcNormal = (p: d.v3f): d.v3f => {
     "use gpu";
     const eps = 0.001;
@@ -350,48 +502,68 @@ export function createShader(root: TgpuRoot) {
     const rdYZ = rotV * d.vec2f(rd.y, rd.z);
     rd = d.vec3f(rd.x, rdYZ.x, rdYZ.y);
 
-    const result = rayMarch(ro, rd);
-    const t = result.x;
-    const iterations = result.y;
+    const sceneResult = rayMarch(ro, rd);
+    const tScene = sceneResult.x;
+    const iterations = sceneResult.y;
     const mode = renderModeUniform.$;
 
-    if (mode === d.u32(1)) {
-      if (t > 50.0) {
-        return d.vec4f(0.0, 0.0, 0.0, 1.0);
+    let tOutline = d.f32(RAY_MISS_T + 1.0);
+    if (selectionEnabledUniform.$ === d.u32(1)) {
+      tOutline = rayMarchSelectionOutline(ro, rd);
+    }
+
+    const outlineHit = tOutline <= RAY_MISS_T;
+    const sceneHit = tScene <= RAY_MISS_T;
+    const outlineVisible =
+      selectionEnabledUniform.$ === d.u32(1) &&
+      outlineHit &&
+      (!sceneHit || tOutline < tScene - 0.0001);
+
+    let col = d.vec3f(0.05, 0.05, 0.08);
+
+    if (!sceneHit) {
+      if (mode !== d.u32(0)) {
+        col = d.vec3f(0.0, 0.0, 0.0);
       }
-      const depth = std.clamp(t / 5.0, 0.0, 1.0);
-      const brightness = 1.0 - depth;
-      return d.vec4f(brightness, brightness, brightness, 1.0);
-    }
+    } else {
+      const pos = ro + rd * tScene;
 
-    if (mode === d.u32(2)) {
-      if (t > 50.0) {
-        return d.vec4f(0.0, 0.0, 0.0, 1.0);
+      if (mode === d.u32(1)) {
+        const depth = std.clamp(tScene / 5.0, 0.0, 1.0);
+        const brightness = 1.0 - depth;
+        col = d.vec3f(brightness, brightness, brightness);
+      } else if (mode === d.u32(2)) {
+        const brightness = std.clamp(iterations / 64.0, 0.0, 1.0);
+        col = d.vec3f(brightness, brightness, brightness);
+      } else {
+        const N = calcNormal(pos);
+        const lightDir = std.normalize(d.vec3f(2.0, 3.0, -1.0));
+        const diff = std.max(std.dot(N, lightDir), 0.0);
+        const viewDir = d.vec3f(-rd.x, -rd.y, -rd.z);
+        const fresnel = std.pow(1.0 - std.abs(std.dot(N, viewDir)), 3.0) * 0.5;
+        const halfDir = std.normalize(lightDir + viewDir);
+        const spec = std.pow(std.max(std.dot(N, halfDir), 0.0), 64.0) * 1.5;
+        const ao = 1.0 - std.clamp(iterations / 64.0, 0.0, 1.0) * 0.4;
+        const baseColor = d.vec3f(0.55, 0.65, 0.95);
+        col = std.sqrt(
+          std.max(
+            (baseColor * (diff * 0.8 + 0.2) +
+              d.vec3f(1.0, 1.0, 1.0) * spec +
+              baseColor * fresnel) *
+              ao,
+            d.vec3f(0.0),
+          ),
+        );
       }
-      const brightness = std.clamp(iterations / 64.0, 0.0, 1.0);
-      return d.vec4f(brightness, brightness, brightness, 1.0);
     }
 
-    if (t > 50.0) {
-      return d.vec4f(0.05, 0.05, 0.08, 1.0);
+    if (outlineVisible) {
+      const outlinePos = ro + rd * tOutline;
+      const edge = selectionOutlineMask(outlinePos, rd);
+      col = col + selectionOutlineColor() * edge;
     }
 
-    const pos = ro + rd * t;
-    const N = calcNormal(pos);
-    const lightDir = std.normalize(d.vec3f(2.0, 3.0, -1.0));
-    const diff = std.max(std.dot(N, lightDir), 0.0);
-    const viewDir = d.vec3f(-rd.x, -rd.y, -rd.z);
-    const fresnel = std.pow(1.0 - std.abs(std.dot(N, viewDir)), 3.0) * 0.5;
-    const halfDir = std.normalize(lightDir + viewDir);
-    const spec = std.pow(std.max(std.dot(N, halfDir), 0.0), 64.0) * 1.5;
-    const ao = 1.0 - std.clamp(iterations / 64.0, 0.0, 1.0) * 0.4;
-    const baseColor = d.vec3f(0.55, 0.65, 0.95);
-    const col =
-      (baseColor * (diff * 0.8 + 0.2) +
-        d.vec3f(1.0, 1.0, 1.0) * spec +
-        baseColor * fresnel) *
-      ao;
-    return d.vec4f(std.sqrt(std.max(col, d.vec3f(0.0))), 1.0);
+    return d.vec4f(col, 1.0);
   };
 
   const pipeline = root.createRenderPipeline({
@@ -409,5 +581,8 @@ export function createShader(root: TgpuRoot) {
     objectInfoBuffer,
     objectCountUniform,
     renderModeUniform,
+    selectionInstructionsBuffer,
+    selectionCountUniform,
+    selectionEnabledUniform,
   };
 }
