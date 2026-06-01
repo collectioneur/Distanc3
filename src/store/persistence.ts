@@ -1,15 +1,15 @@
 import { useEffect, useRef } from "react";
-import { type SceneObject, type ShapeType, useSceneStore } from "./sceneStore";
+import { createDefaultRoot, type SceneRoot, type ShapeType, useSceneStore } from "./sceneStore";
 import { temporalStore } from "./sceneStore";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 4;
 const LS_KEY = "distanc3_scene";
 
 export type PersistedScene = {
   v: number;
-  objects: SceneObject[];
+  root: SceneRoot;
   counters: Record<ShapeType, number>;
-  objectCounter: number;
+  groupCounter: number;
 };
 
 export function encodeHash(s: PersistedScene): string {
@@ -51,7 +51,6 @@ export function loadInitialState(): Partial<PersistedScene> {
   if (hash) {
     const fromUrl = decodeHash(hash);
     if (fromUrl) return fromUrl;
-    // Corrupt hash — remove it so we don't confuse the user
     history.replaceState(null, "", window.location.pathname + window.location.search);
   }
   return loadFromStorage() ?? {};
@@ -59,11 +58,11 @@ export function loadInitialState(): Partial<PersistedScene> {
 
 function applyScene(scene: PersistedScene) {
   useSceneStore.setState({
-    objects: scene.objects,
+    root: scene.root,
     counters: scene.counters,
-    objectCounter: scene.objectCounter,
-    selectedObjectId: null,
-    selectedNodeId: null,
+    groupCounter: scene.groupCounter,
+    selectedContainerId: scene.root.id,
+    selectedItemId: null,
   });
   temporalStore.getState().clear();
 }
@@ -74,15 +73,14 @@ export function usePersistence(): void {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
 
-    // Write store → URL + localStorage (debounced)
     const unsub = useSceneStore.subscribe((state) => {
       clearTimeout(timer);
       timer = setTimeout(() => {
         const persisted: PersistedScene = {
           v: SCHEMA_VERSION,
-          objects: state.objects,
+          root: state.root,
           counters: state.counters,
-          objectCounter: state.objectCounter,
+          groupCounter: state.groupCounter,
         };
         const encoded = encodeHash(persisted);
         lastWrittenHash.current = encoded;
@@ -95,10 +93,8 @@ export function usePersistence(): void {
       }, 1000);
     });
 
-    // Read URL → store (external navigation: back/forward, pasted link)
     function onHashChange() {
       const hash = window.location.hash.slice(1);
-      // Skip if we wrote this hash ourselves
       if (hash === lastWrittenHash.current) return;
 
       const fromUrl = decodeHash(hash);
@@ -107,23 +103,23 @@ export function usePersistence(): void {
         try {
           localStorage.setItem(LS_KEY, JSON.stringify(fromUrl));
         } catch {
-          // ignore quota errors
+          // ignore
         }
         applyScene(fromUrl);
         return;
       }
 
-      // Corrupt / missing hash — fall back to localStorage
       const fromLS = loadFromStorage();
       if (fromLS) {
         applyScene(fromLS);
       } else {
+        const root = createDefaultRoot();
         useSceneStore.setState({
-          objects: [],
+          root,
           counters: { sphere: 0, box: 0, torus: 0, cylinder: 0, capsule: 0, cone: 0 },
-          objectCounter: 0,
-          selectedObjectId: null,
-          selectedNodeId: null,
+          groupCounter: 0,
+          selectedContainerId: root.id,
+          selectedItemId: null,
         });
         temporalStore.getState().clear();
       }

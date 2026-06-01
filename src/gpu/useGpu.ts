@@ -2,16 +2,23 @@ import { useEffect, type RefObject } from "react";
 import tgpu, { d } from "typegpu";
 import {
   createShader,
-  MAX_OBJECTS,
-  MAX_NODES_PER_OBJECT,
+  MAX_GPU_OBJECTS,
+  MAX_INSTRUCTIONS,
+  OPCODE_OP,
+  OPCODE_PUSH_SHAPE,
+  OPCODE_TRANSFORM_POP,
+  OPCODE_TRANSFORM_PUSH,
   SHAPE_TYPE_INT,
   OP_TYPE_INT,
 } from "./shader";
 import {
   useSceneStore,
-  findNodeInTree,
-  type CsgNode,
-  type SceneObject,
+  findItem,
+  type ObjectGroup,
+  type OpType,
+  type SceneItem,
+  type SceneRoot,
+  type ShapeLayer,
 } from "../store/sceneStore";
 import { useRenderStore } from "../store/renderStore";
 
@@ -42,73 +49,108 @@ const EMPTY_INSTRUCTION: InstructionData = {
 };
 
 const EMPTY_OBJECT_INFO: ObjectInfoData = { start: 0, count: 0 };
-const TOTAL_INSTRUCTIONS = MAX_OBJECTS * MAX_NODES_PER_OBJECT;
 
-// Compile a CSG binary tree into a postorder instruction sequence.
-// PUSH_SHAPE instructions evaluate a primitive SDF;
-// OP instructions pop two values, apply a boolean op, and push the result.
-function compileCsgTree(node: CsgNode, out: InstructionData[]): void {
-  if (node.kind === "shape") {
-    const DEG_TO_RAD = Math.PI / 180;
-    const [rx, ry, rz] = node.rotation ?? [0, 0, 0];
-    out.push({
-      opcode: 0,
-      shapeType: SHAPE_TYPE_INT[node.shapeType],
-      opType: 0,
-      smoothK: 0,
-      position: d.vec3f(node.position[0], node.position[1], node.position[2]),
-      _pad: 0,
-      params: d.vec4f(
-        node.params[0],
-        node.params[1],
-        node.params[2],
-        node.params[3],
-      ),
-      rotation: d.vec3f(rx * DEG_TO_RAD, ry * DEG_TO_RAD, rz * DEG_TO_RAD),
-      _pad2: 0,
-    });
-  } else {
-    compileCsgTree(node.left, out);
-    compileCsgTree(node.right, out);
-    out.push({
-      opcode: 1,
-      shapeType: 0,
-      opType: OP_TYPE_INT[node.op],
-      smoothK: node.smoothK,
-      position: d.vec3f(0, 0, 0),
-      _pad: 0,
-      params: d.vec4f(0, 0, 0, 0),
-      rotation: d.vec3f(0, 0, 0),
-      _pad2: 0,
-    });
+const DEG_TO_RAD = Math.PI / 180;
+
+function pushShapeInstruction(layer: ShapeLayer, out: InstructionData[]): void {
+  const [rx, ry, rz] = layer.rotation;
+  out.push({
+    opcode: OPCODE_PUSH_SHAPE,
+    shapeType: SHAPE_TYPE_INT[layer.shapeType],
+    opType: 0,
+    smoothK: 0,
+    position: d.vec3f(layer.position[0], layer.position[1], layer.position[2]),
+    _pad: 0,
+    params: d.vec4f(
+      layer.params[0],
+      layer.params[1],
+      layer.params[2],
+      layer.params[3],
+    ),
+    rotation: d.vec3f(rx * DEG_TO_RAD, ry * DEG_TO_RAD, rz * DEG_TO_RAD),
+    _pad2: 0,
+  });
+}
+
+function pushOpInstruction(op: OpType, smoothK: number, out: InstructionData[]): void {
+  out.push({
+    opcode: OPCODE_OP,
+    shapeType: 0,
+    opType: OP_TYPE_INT[op],
+    smoothK,
+    position: d.vec3f(0, 0, 0),
+    _pad: 0,
+    params: d.vec4f(0, 0, 0, 0),
+    rotation: d.vec3f(0, 0, 0),
+    _pad2: 0,
+  });
+}
+
+function pushTransformPush(group: ObjectGroup, out: InstructionData[]): void {
+  const [rx, ry, rz] = group.rotation;
+  out.push({
+    opcode: OPCODE_TRANSFORM_PUSH,
+    shapeType: 0,
+    opType: 0,
+    smoothK: 0,
+    position: d.vec3f(group.position[0], group.position[1], group.position[2]),
+    _pad: 0,
+    params: d.vec4f(group.scale[0], group.scale[1], group.scale[2], 0),
+    rotation: d.vec3f(rx * DEG_TO_RAD, ry * DEG_TO_RAD, rz * DEG_TO_RAD),
+    _pad2: 0,
+  });
+}
+
+function pushTransformPop(out: InstructionData[]): void {
+  out.push({
+    opcode: OPCODE_TRANSFORM_POP,
+    shapeType: 0,
+    opType: 0,
+    smoothK: 0,
+    position: d.vec3f(0, 0, 0),
+    _pad: 0,
+    params: d.vec4f(0, 0, 0, 0),
+    rotation: d.vec3f(0, 0, 0),
+    _pad2: 0,
+  });
+}
+
+function compileItems(items: SceneItem[], out: InstructionData[]): void {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind === "layer") {
+      pushShapeInstruction(item, out);
+      if (i > 0) pushOpInstruction(item.op, item.smoothK, out);
+    } else {
+      if (item.items.length > 0) {
+        pushTransformPush(item, out);
+        compileItems(item.items, out);
+        pushTransformPop(out);
+      }
+      if (i > 0) pushOpInstruction(item.op, item.smoothK, out);
+    }
   }
 }
 
-function buildGpuData(objects: SceneObject[]): {
+function buildGpuData(root: SceneRoot): {
   instructions: InstructionData[];
   objectInfos: ObjectInfoData[];
   objectCount: number;
 } {
   const instructions: InstructionData[] = [];
   const objectInfos: ObjectInfoData[] = [];
-  let currentStart = 0;
 
-  for (const obj of objects) {
-    if (!obj.root) continue; // skip empty objects
-    const objInstructions: InstructionData[] = [];
-    compileCsgTree(obj.root, objInstructions);
-    objectInfos.push({ start: currentStart, count: objInstructions.length });
-    instructions.push(...objInstructions);
-    currentStart += objInstructions.length;
+  if (root.items.length > 0) {
+    compileItems(root.items, instructions);
+    objectInfos.push({ start: 0, count: instructions.length });
   }
 
   const objectCount = objectInfos.length;
 
-  // Pad to fixed GPU buffer sizes
-  while (instructions.length < TOTAL_INSTRUCTIONS) {
+  while (instructions.length < MAX_INSTRUCTIONS) {
     instructions.push(EMPTY_INSTRUCTION);
   }
-  while (objectInfos.length < MAX_OBJECTS) {
+  while (objectInfos.length < MAX_GPU_OBJECTS) {
     objectInfos.push(EMPTY_OBJECT_INFO);
   }
 
@@ -116,9 +158,8 @@ function buildGpuData(objects: SceneObject[]): {
 }
 
 function buildSelectionGpuData(
-  objects: SceneObject[],
-  selectedObjectId: string | null,
-  selectedNodeId: string | null,
+  root: SceneRoot,
+  selectedItemId: string | null,
 ): {
   instructions: InstructionData[];
   count: number;
@@ -126,37 +167,36 @@ function buildSelectionGpuData(
 } {
   const instructions: InstructionData[] = [];
 
-  if (!selectedObjectId || !selectedNodeId) {
-    while (instructions.length < MAX_NODES_PER_OBJECT) {
+  if (!selectedItemId) {
+    while (instructions.length < MAX_INSTRUCTIONS) {
       instructions.push(EMPTY_INSTRUCTION);
     }
     return { instructions, count: 0, enabled: false };
   }
 
-  const obj = objects.find((o) => o.id === selectedObjectId);
-  if (!obj?.root) {
-    while (instructions.length < MAX_NODES_PER_OBJECT) {
+  const found = findItem(root, selectedItemId);
+  if (!found) {
+    while (instructions.length < MAX_INSTRUCTIONS) {
       instructions.push(EMPTY_INSTRUCTION);
     }
     return { instructions, count: 0, enabled: false };
   }
 
-  const node = findNodeInTree(obj.root, selectedNodeId);
-  if (!node) {
-    while (instructions.length < MAX_NODES_PER_OBJECT) {
-      instructions.push(EMPTY_INSTRUCTION);
-    }
-    return { instructions, count: 0, enabled: false };
+  if (found.item.kind === "layer") {
+    pushShapeInstruction(found.item, instructions);
+  } else if (found.item.items.length > 0) {
+    pushTransformPush(found.item, instructions);
+    compileItems(found.item.items, instructions);
+    pushTransformPop(instructions);
   }
 
-  compileCsgTree(node, instructions);
   const count = instructions.length;
 
-  while (instructions.length < MAX_NODES_PER_OBJECT) {
+  while (instructions.length < MAX_INSTRUCTIONS) {
     instructions.push(EMPTY_INSTRUCTION);
   }
 
-  return { instructions, count, enabled: true };
+  return { instructions, count, enabled: count > 0 };
 }
 
 export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
@@ -254,10 +294,9 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       const startTime = performance.now();
       const TARGET_MS = 1000 / 60;
       let lastFrameTime = 0;
-      let lastObjects: SceneObject[] = [];
+      let lastRoot: SceneRoot | null = null;
       let lastRenderMode = -1;
-      let lastSelectedObjectId: string | null = null;
-      let lastSelectedNodeId: string | null = null;
+      let lastSelectedItemId: string | null = null;
       let sceneGpuDirty = true;
 
       function frame(now: number) {
@@ -267,37 +306,30 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         }
         lastFrameTime = now;
 
-        const { objects, selectedObjectId, selectedNodeId } =
-          useSceneStore.getState();
+        const { root: sceneRoot, selectedItemId } = useSceneStore.getState();
         const renderMode = useRenderStore.getState().renderMode;
 
         if (
           sceneGpuDirty ||
-          objects !== lastObjects ||
+          sceneRoot !== lastRoot ||
           renderMode !== lastRenderMode ||
-          selectedObjectId !== lastSelectedObjectId ||
-          selectedNodeId !== lastSelectedNodeId
+          selectedItemId !== lastSelectedItemId
         ) {
           const { instructions, objectInfos, objectCount } =
-            buildGpuData(objects);
+            buildGpuData(sceneRoot);
           instructionsBuffer.write(instructions);
           objectInfoBuffer.write(objectInfos);
           objectCountUniform.write(objectCount);
           renderModeUniform.write(renderMode);
 
-          const selection = buildSelectionGpuData(
-            objects,
-            selectedObjectId,
-            selectedNodeId,
-          );
+          const selection = buildSelectionGpuData(sceneRoot, selectedItemId);
           selectionInstructionsBuffer.write(selection.instructions);
           selectionCountUniform.write(selection.count);
           selectionEnabledUniform.write(selection.enabled ? 1 : 0);
 
-          lastObjects = objects;
+          lastRoot = sceneRoot;
           lastRenderMode = renderMode;
-          lastSelectedObjectId = selectedObjectId;
-          lastSelectedNodeId = selectedNodeId;
+          lastSelectedItemId = selectedItemId;
           sceneGpuDirty = false;
         }
 
@@ -324,7 +356,6 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       cancelAnimationFrame(animFrameId);
       registeredCleanup?.();
     };
-    // canvasRef is a stable ref object — safe to omit from deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }

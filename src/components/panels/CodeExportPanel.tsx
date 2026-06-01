@@ -5,11 +5,11 @@ import { generateSdScene } from "../../utils/generateSdScene";
 type Tab = "typegpu" | "wgsl";
 
 export default function CodeExportPanel() {
-  const objects = useSceneStore((s) => s.objects);
+  const root = useSceneStore((s) => s.root);
   const [activeTab, setActiveTab] = useState<Tab>("typegpu");
   const [copied, setCopied] = useState(false);
 
-  const code = useMemo(() => generateSdScene(objects), [objects]);
+  const code = useMemo(() => generateSdScene(root), [root]);
   const displayCode = activeTab === "typegpu" ? code.typegpu : code.wgsl;
 
   useEffect(() => {

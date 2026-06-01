@@ -1,4 +1,11 @@
-import { useSceneStore, findNodeInTree, temporalStore, type OpType, type ShapeNode } from "../../store/sceneStore";
+import {
+  useSceneStore,
+  temporalStore,
+  findItem,
+  type ObjectGroup,
+  type OpType,
+  type ShapeLayer,
+} from "../../store/sceneStore";
 
 // ── Shared numeric input ──────────────────────────────────────────────────────
 
@@ -69,8 +76,6 @@ const SIZE_FIELDS: Record<string, SizeField[]> = {
   ],
 };
 
-// ── Op type configuration ─────────────────────────────────────────────────────
-
 const OP_OPTIONS: { value: OpType; label: string; icon: string }[] = [
   { value: "union", label: "Union", icon: "∪" },
   { value: "subtract", label: "Subtract", icon: "∖" },
@@ -82,111 +87,40 @@ const OP_OPTIONS: { value: OpType; label: string; icon: string }[] = [
 
 const SMOOTH_OPS: Set<OpType> = new Set(["sUnion", "sSubtract", "sIntersect"]);
 
-// ── Sub-panels ────────────────────────────────────────────────────────────────
+const OP_HINT: Record<OpType, string> = {
+  union: "Merges with the previous result.",
+  subtract: "Subtracts from the previous result.",
+  intersect: "Keeps only the overlap with the previous result.",
+  sUnion: "Smoothly blends with the previous result.",
+  sSubtract: "Smoothly subtracts from the previous result.",
+  sIntersect: "Smoothly intersects with the previous result.",
+};
 
-function ObjectProperties() {
-  const objects = useSceneStore((s) => s.objects);
-  const selectedObjectId = useSceneStore((s) => s.selectedObjectId);
-  const updateObjectName = useSceneStore((s) => s.updateObjectName);
-
-  const obj = objects.find((o) => o.id === selectedObjectId) ?? null;
-  if (!obj) return null;
-
-  return (
-    <div className="props-content">
-      <div className="props-section-title">Object</div>
-      <div className="prop-row">
-        <label className="prop-label">Name</label>
-        <input
-          className="prop-input"
-          type="text"
-          value={obj.name}
-          onFocus={() => temporalStore.getState().pause()}
-          onBlur={() => temporalStore.getState().resume()}
-          onChange={(e) => updateObjectName(obj.id, e.target.value)}
-        />
-      </div>
-    </div>
-  );
-}
-
-function ShapeProperties({ shape, objectId }: { shape: ShapeNode; objectId: string }) {
-  const updateShapeNode = useSceneStore((s) => s.updateShapeNode);
-
-  const setPosition = (axis: 0 | 1 | 2, v: number) => {
-    const pos: [number, number, number] = [...shape.position];
-    pos[axis] = v;
-    updateShapeNode(objectId, shape.id, { position: pos });
-  };
-
-  const setRotation = (axis: 0 | 1 | 2, v: number) => {
-    const rot: [number, number, number] = [...(shape.rotation ?? [0, 0, 0])];
-    rot[axis] = v;
-    updateShapeNode(objectId, shape.id, { rotation: rot });
-  };
-
-  const setParam = (idx: 0 | 1 | 2, v: number) => {
-    const params: [number, number, number, number] = [...shape.params];
-    params[idx] = v;
-    updateShapeNode(objectId, shape.id, { params });
-  };
-
-  const sizeFields = SIZE_FIELDS[shape.shapeType] ?? [];
-
-  return (
-    <div className="props-content">
-      <div className="props-section-title">Position</div>
-      <NumericInput label="X" value={shape.position[0]} step={0.1} onChange={(v) => setPosition(0, v)} />
-      <NumericInput label="Y" value={shape.position[1]} step={0.1} onChange={(v) => setPosition(1, v)} />
-      <NumericInput label="Z" value={shape.position[2]} step={0.1} onChange={(v) => setPosition(2, v)} />
-
-      <div className="props-section-title" style={{ marginTop: "16px" }}>Rotation (°)</div>
-      <NumericInput label="Rx" value={(shape.rotation ?? [0, 0, 0])[0]} step={1} onChange={(v) => setRotation(0, v)} />
-      <NumericInput label="Ry" value={(shape.rotation ?? [0, 0, 0])[1]} step={1} onChange={(v) => setRotation(1, v)} />
-      <NumericInput label="Rz" value={(shape.rotation ?? [0, 0, 0])[2]} step={1} onChange={(v) => setRotation(2, v)} />
-
-      <div className="props-section-title" style={{ marginTop: "16px" }}>Size</div>
-      {sizeFields.map((f) => (
-        <NumericInput
-          key={f.label}
-          label={f.label}
-          value={shape.params[f.paramIndex]}
-          min={f.min}
-          step={f.step}
-          onChange={(v) => setParam(f.paramIndex, v)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function OpProperties({
-  nodeId,
-  objectId,
+function OperationFields({
+  op,
+  smoothK,
+  showOp,
+  onOpChange,
+  onSmoothKChange,
 }: {
-  nodeId: string;
-  objectId: string;
+  op: OpType;
+  smoothK: number;
+  showOp: boolean;
+  onOpChange: (op: OpType) => void;
+  onSmoothKChange: (k: number) => void;
 }) {
-  const objects = useSceneStore((s) => s.objects);
-  const updateOpNode = useSceneStore((s) => s.updateOpNode);
-
-  const obj = objects.find((o) => o.id === objectId) ?? null;
-  const node = findNodeInTree(obj?.root ?? null, nodeId);
-  if (!node || node.kind !== "op") return null;
-
-  const isSmooth = SMOOTH_OPS.has(node.op);
+  if (!showOp) return null;
+  const isSmooth = SMOOTH_OPS.has(op);
 
   return (
-    <div className="props-content">
+    <>
       <div className="props-section-title">Operation</div>
       <div className="prop-row">
         <label className="prop-label">Type</label>
         <select
           className="prop-input prop-select"
-          value={node.op}
-          onChange={(e) =>
-            updateOpNode(objectId, nodeId, { op: e.target.value as OpType })
-          }
+          value={op}
+          onChange={(e) => onOpChange(e.target.value as OpType)}
         >
           {OP_OPTIONS.map((opt) => (
             <option key={opt.value} value={opt.value}>
@@ -199,72 +133,206 @@ function OpProperties({
       {isSmooth && (
         <NumericInput
           label="Smooth K"
-          value={node.smoothK}
+          value={smoothK}
           min={0.001}
           step={0.01}
-          onChange={(v) => updateOpNode(objectId, nodeId, { smoothK: v })}
+          onChange={onSmoothKChange}
         />
       )}
 
-      <p className="props-op-hint">
-        {node.op === "union" && "Merges both shapes."}
-        {node.op === "subtract" && "Subtracts right from left."}
-        {node.op === "intersect" && "Keeps only the overlap."}
-        {node.op === "sUnion" && "Smoothly blends both shapes."}
-        {node.op === "sSubtract" && "Smoothly subtracts right from left."}
-        {node.op === "sIntersect" && "Smoothly intersects both shapes."}
-      </p>
+      <p className="props-op-hint">{OP_HINT[op]}</p>
+    </>
+  );
+}
+
+function RootProperties() {
+  const root = useSceneStore((s) => s.root);
+  const updateRootName = useSceneStore((s) => s.updateRootName);
+
+  return (
+    <div className="props-content">
+      <div className="props-section-title">Scene</div>
+      <div className="prop-row">
+        <label className="prop-label">Name</label>
+        <input
+          className="prop-input"
+          type="text"
+          value={root.name}
+          onFocus={() => temporalStore.getState().pause()}
+          onBlur={() => temporalStore.getState().resume()}
+          onChange={(e) => updateRootName(e.target.value)}
+        />
+      </div>
     </div>
   );
 }
 
-// ── Panel ─────────────────────────────────────────────────────────────────────
+function GroupProperties({ group, itemIndex }: { group: ObjectGroup; itemIndex: number }) {
+  const updateGroup = useSceneStore((s) => s.updateGroup);
+  const showOp = itemIndex > 0;
+
+  const setPosition = (axis: 0 | 1 | 2, v: number) => {
+    const pos: [number, number, number] = [...group.position];
+    pos[axis] = v;
+    updateGroup(group.id, { position: pos });
+  };
+
+  const setRotation = (axis: 0 | 1 | 2, v: number) => {
+    const rot: [number, number, number] = [...group.rotation];
+    rot[axis] = v;
+    updateGroup(group.id, { rotation: rot });
+  };
+
+  const setScale = (axis: 0 | 1 | 2, v: number) => {
+    const scale: [number, number, number] = [...group.scale];
+    scale[axis] = v;
+    updateGroup(group.id, { scale });
+  };
+
+  return (
+    <div className="props-content">
+      <div className="props-section-title">Object</div>
+      <div className="prop-row">
+        <label className="prop-label">Name</label>
+        <input
+          className="prop-input"
+          type="text"
+          value={group.name}
+          onFocus={() => temporalStore.getState().pause()}
+          onBlur={() => temporalStore.getState().resume()}
+          onChange={(e) => updateGroup(group.id, { name: e.target.value })}
+        />
+      </div>
+
+      <OperationFields
+        op={group.op}
+        smoothK={group.smoothK}
+        showOp={showOp}
+        onOpChange={(op) => updateGroup(group.id, { op })}
+        onSmoothKChange={(smoothK) => updateGroup(group.id, { smoothK })}
+      />
+
+      <div className="props-section-title" style={{ marginTop: showOp ? "16px" : undefined }}>
+        Position
+      </div>
+      <NumericInput label="X" value={group.position[0]} step={0.1} onChange={(v) => setPosition(0, v)} />
+      <NumericInput label="Y" value={group.position[1]} step={0.1} onChange={(v) => setPosition(1, v)} />
+      <NumericInput label="Z" value={group.position[2]} step={0.1} onChange={(v) => setPosition(2, v)} />
+
+      <div className="props-section-title" style={{ marginTop: "16px" }}>Rotation (°)</div>
+      <NumericInput label="Rx" value={group.rotation[0]} step={1} onChange={(v) => setRotation(0, v)} />
+      <NumericInput label="Ry" value={group.rotation[1]} step={1} onChange={(v) => setRotation(1, v)} />
+      <NumericInput label="Rz" value={group.rotation[2]} step={1} onChange={(v) => setRotation(2, v)} />
+
+      <div className="props-section-title" style={{ marginTop: "16px" }}>Scale</div>
+      <NumericInput label="Sx" value={group.scale[0]} min={0.01} step={0.1} onChange={(v) => setScale(0, v)} />
+      <NumericInput label="Sy" value={group.scale[1]} min={0.01} step={0.1} onChange={(v) => setScale(1, v)} />
+      <NumericInput label="Sz" value={group.scale[2]} min={0.01} step={0.1} onChange={(v) => setScale(2, v)} />
+    </div>
+  );
+}
+
+function LayerProperties({
+  layer,
+  containerId,
+  itemIndex,
+}: {
+  layer: ShapeLayer;
+  containerId: string;
+  itemIndex: number;
+}) {
+  const updateLayer = useSceneStore((s) => s.updateLayer);
+
+  const setPosition = (axis: 0 | 1 | 2, v: number) => {
+    const pos: [number, number, number] = [...layer.position];
+    pos[axis] = v;
+    updateLayer(containerId, layer.id, { position: pos });
+  };
+
+  const setRotation = (axis: 0 | 1 | 2, v: number) => {
+    const rot: [number, number, number] = [...layer.rotation];
+    rot[axis] = v;
+    updateLayer(containerId, layer.id, { rotation: rot });
+  };
+
+  const setParam = (idx: 0 | 1 | 2, v: number) => {
+    const params: [number, number, number, number] = [...layer.params];
+    params[idx] = v;
+    updateLayer(containerId, layer.id, { params });
+  };
+
+  const sizeFields = SIZE_FIELDS[layer.shapeType] ?? [];
+  const showOp = itemIndex > 0;
+
+  return (
+    <div className="props-content">
+      <OperationFields
+        op={layer.op}
+        smoothK={layer.smoothK}
+        showOp={showOp}
+        onOpChange={(op) => updateLayer(containerId, layer.id, { op })}
+        onSmoothKChange={(smoothK) => updateLayer(containerId, layer.id, { smoothK })}
+      />
+
+      <div className="props-section-title" style={{ marginTop: showOp ? "16px" : undefined }}>
+        Position
+      </div>
+      <NumericInput label="X" value={layer.position[0]} step={0.1} onChange={(v) => setPosition(0, v)} />
+      <NumericInput label="Y" value={layer.position[1]} step={0.1} onChange={(v) => setPosition(1, v)} />
+      <NumericInput label="Z" value={layer.position[2]} step={0.1} onChange={(v) => setPosition(2, v)} />
+
+      <div className="props-section-title" style={{ marginTop: "16px" }}>Rotation (°)</div>
+      <NumericInput label="Rx" value={layer.rotation[0]} step={1} onChange={(v) => setRotation(0, v)} />
+      <NumericInput label="Ry" value={layer.rotation[1]} step={1} onChange={(v) => setRotation(1, v)} />
+      <NumericInput label="Rz" value={layer.rotation[2]} step={1} onChange={(v) => setRotation(2, v)} />
+
+      <div className="props-section-title" style={{ marginTop: "16px" }}>Size</div>
+      {sizeFields.map((f) => (
+        <NumericInput
+          key={f.label}
+          label={f.label}
+          value={layer.params[f.paramIndex]}
+          min={f.min}
+          step={f.step}
+          onChange={(v) => setParam(f.paramIndex, v)}
+        />
+      ))}
+    </div>
+  );
+}
 
 export default function RightPanel() {
-  const objects = useSceneStore((s) => s.objects);
-  const selectedObjectId = useSceneStore((s) => s.selectedObjectId);
-  const selectedNodeId = useSceneStore((s) => s.selectedNodeId);
+  const root = useSceneStore((s) => s.root);
+  const selectedItemId = useSceneStore((s) => s.selectedItemId);
 
-  const selectedObject = objects.find((o) => o.id === selectedObjectId) ?? null;
-  const selectedNode = selectedObject
-    ? findNodeInTree(selectedObject.root, selectedNodeId)
-    : null;
+  const found = selectedItemId ? findItem(root, selectedItemId) : null;
 
-  let title = "";
+  let title = root.name;
   let content: React.ReactNode = null;
 
-  if (selectedNode) {
-    if (selectedNode.kind === "shape") {
-      title = selectedNode.name;
-      content = (
-        <ShapeProperties shape={selectedNode} objectId={selectedObjectId!} />
-      );
-    } else {
-      title = "Operation";
-      content = (
-        <OpProperties nodeId={selectedNode.id} objectId={selectedObjectId!} />
-      );
-    }
-  } else if (selectedObject) {
-    title = selectedObject.name;
-    content = <ObjectProperties />;
+  if (found?.item.kind === "layer") {
+    title = found.item.name;
+    content = (
+      <LayerProperties
+        layer={found.item}
+        containerId={found.container.id}
+        itemIndex={found.index}
+      />
+    );
+  } else if (found?.item.kind === "group") {
+    title = found.item.name;
+    content = <GroupProperties group={found.item} itemIndex={found.index} />;
+  } else {
+    content = <RootProperties />;
   }
 
   return (
     <div className="panel panel-right">
       <div className="panel-header">Properties</div>
-      {content ? (
-        <>
-          <div className="props-shape-name">{title}</div>
-          {content}
-        </>
-      ) : (
-        <p className="scene-empty">
-          Select an object or node
-          <br />
-          to edit its properties.
-        </p>
-      )}
+      <>
+        <div className="props-shape-name">{title}</div>
+        {content}
+      </>
     </div>
   );
 }

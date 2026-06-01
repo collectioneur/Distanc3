@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Canvas from "./components/Canvas";
 import TopPanel from "./components/panels/TopPanel";
 import LeftPanel from "./components/panels/LeftPanel";
@@ -7,9 +7,24 @@ import BottomPanel from "./components/panels/BottomPanel";
 import CodeExportPanel from "./components/panels/CodeExportPanel";
 import { undoScene, redoScene } from "./store/sceneStore";
 import { usePersistence } from "./store/persistence";
+import { setToastListener } from "./utils/toast";
 
 export default function App() {
   usePersistence();
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    setToastListener((message) => {
+      setToast(message);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => setToast(null), 2500);
+    });
+    return () => {
+      setToastListener(null);
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -45,8 +60,30 @@ export default function App() {
       <TopPanel />
       <LeftPanel />
       <RightPanel />
-      <CodeExportPanel />
+      <div style={{ display: "none", pointerEvents: "none" }}>
+        <CodeExportPanel />
+      </div>
       <BottomPanel />
+      {toast && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(20, 20, 24, 0.92)",
+            color: "#f0f0f0",
+            padding: "10px 16px",
+            borderRadius: 8,
+            fontSize: 13,
+            zIndex: 1000,
+            pointerEvents: "none",
+            border: "1px solid rgba(255,255,255,0.12)",
+          }}
+        >
+          {toast}
+        </div>
+      )}
     </>
   );
 }
