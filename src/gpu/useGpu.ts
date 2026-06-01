@@ -169,10 +169,17 @@ function buildSelectionGpuData(
   const instructions: InstructionData[] = [];
 
   if (!selectedItemId) {
+    if (root.items.length > 0) {
+      compileItems(root.items, instructions);
+    }
+
+    const count = instructions.length;
+
     while (instructions.length < MAX_INSTRUCTIONS) {
       instructions.push(EMPTY_INSTRUCTION);
     }
-    return { instructions, count: 0, enabled: false };
+
+    return { instructions, count, enabled: count > 0 };
   }
 
   const found = findItem(root, selectedItemId);
