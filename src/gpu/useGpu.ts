@@ -14,6 +14,7 @@ import {
 import {
   useSceneStore,
   findItem,
+  getAncestorGroups,
   type ObjectGroup,
   type OpType,
   type SceneItem,
@@ -182,11 +183,20 @@ function buildSelectionGpuData(
     return { instructions, count: 0, enabled: false };
   }
 
+  const ancestors = getAncestorGroups(root, found.container.id);
+  for (const group of ancestors) {
+    pushTransformPush(group, instructions);
+  }
+
   if (found.item.kind === "layer") {
     pushShapeInstruction(found.item, instructions);
   } else if (found.item.items.length > 0) {
     pushTransformPush(found.item, instructions);
     compileItems(found.item.items, instructions);
+    pushTransformPop(instructions);
+  }
+
+  for (let i = ancestors.length - 1; i >= 0; i--) {
     pushTransformPop(instructions);
   }
 

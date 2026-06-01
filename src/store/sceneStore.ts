@@ -170,6 +170,24 @@ function findContainerInGroup(
   return null;
 }
 
+/** Groups from outermost ancestor down to containerId (inclusive when container is a group). */
+export function getAncestorGroups(root: SceneRoot, containerId: string): ObjectGroup[] {
+  if (root.id === containerId) return [];
+
+  function search(items: SceneItem[], path: ObjectGroup[]): ObjectGroup[] | null {
+    for (const item of items) {
+      if (item.kind !== "group") continue;
+      const nextPath = [...path, item];
+      if (item.id === containerId) return nextPath;
+      const found = search(item.items, nextPath);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  return search(root.items, []) ?? [];
+}
+
 export function findItem(
   root: SceneRoot,
   itemId: string,
