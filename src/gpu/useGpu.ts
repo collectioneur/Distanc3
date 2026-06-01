@@ -165,21 +165,18 @@ function buildSelectionGpuData(
   instructions: InstructionData[];
   count: number;
   enabled: boolean;
+  usesSceneSdf: boolean;
 } {
   const instructions: InstructionData[] = [];
 
   if (!selectedItemId) {
-    if (root.items.length > 0) {
-      compileItems(root.items, instructions);
-    }
-
-    const count = instructions.length;
+    const enabled = root.items.length > 0;
 
     while (instructions.length < MAX_INSTRUCTIONS) {
       instructions.push(EMPTY_INSTRUCTION);
     }
 
-    return { instructions, count, enabled: count > 0 };
+    return { instructions, count: 0, enabled, usesSceneSdf: enabled };
   }
 
   const found = findItem(root, selectedItemId);
@@ -187,7 +184,7 @@ function buildSelectionGpuData(
     while (instructions.length < MAX_INSTRUCTIONS) {
       instructions.push(EMPTY_INSTRUCTION);
     }
-    return { instructions, count: 0, enabled: false };
+    return { instructions, count: 0, enabled: false, usesSceneSdf: false };
   }
 
   const ancestors = getAncestorGroups(root, found.container.id);
@@ -213,7 +210,7 @@ function buildSelectionGpuData(
     instructions.push(EMPTY_INSTRUCTION);
   }
 
-  return { instructions, count, enabled: count > 0 };
+  return { instructions, count, enabled: count > 0, usesSceneSdf: false };
 }
 
 export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
@@ -249,6 +246,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         selectionInstructionsBuffer,
         selectionCountUniform,
         selectionEnabledUniform,
+        selectionUsesSceneSdfUniform,
       } = createShader(root);
 
       let isDragging = false;
@@ -343,6 +341,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           selectionInstructionsBuffer.write(selection.instructions);
           selectionCountUniform.write(selection.count);
           selectionEnabledUniform.write(selection.enabled ? 1 : 0);
+          selectionUsesSceneSdfUniform.write(selection.usesSceneSdf ? 1 : 0);
 
           lastRoot = sceneRoot;
           lastRenderMode = renderMode;

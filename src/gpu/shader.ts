@@ -1,6 +1,10 @@
 import tgpu, { d, std } from "typegpu";
 import { fullScreenTriangle } from "typegpu/common";
-import { MAX_GPU_OBJECTS, MAX_INSTRUCTIONS, MAX_TRANSFORM_DEPTH } from "../store/sceneStore";
+import {
+  MAX_GPU_OBJECTS,
+  MAX_INSTRUCTIONS,
+  MAX_TRANSFORM_DEPTH,
+} from "../store/sceneStore";
 
 type TgpuRoot = Awaited<ReturnType<typeof tgpu.init>>;
 
@@ -82,6 +86,7 @@ export function createShader(root: TgpuRoot) {
   const objectCountUniform = root.createUniform(d.u32, 0);
   const renderModeUniform = root.createUniform(d.u32, 0);
   const selectionEnabledUniform = root.createUniform(d.u32, 0);
+  const selectionUsesSceneSdfUniform = root.createUniform(d.u32, 0);
   const selectionCountUniform = root.createUniform(d.u32, 0);
 
   const instructionsBuffer = root.createReadonly(
@@ -171,7 +176,12 @@ export function createShader(root: TgpuRoot) {
     return d.vec3f(p2.x, cxn * p2.y - sxn * p2.z, sxn * p2.y + cxn * p2.z);
   };
 
-  const applyParentTransform = (p: d.v3f, pos: d.v3f, rot: d.v3f, scale: d.v3f): d.v3f => {
+  const applyParentTransform = (
+    p: d.v3f,
+    pos: d.v3f,
+    rot: d.v3f,
+    scale: d.v3f,
+  ): d.v3f => {
     "use gpu";
     const q = p - pos;
     const r = applyInvRotXYZ(q, rot);
@@ -332,22 +342,38 @@ export function createShader(root: TgpuRoot) {
 
         if (instr.opcode === d.u32(0)) {
           let pEval = d.vec3f(p.x, p.y, p.z);
-          if (tsp > d.u32(0)) pEval = applyParentTransform(pEval, tPos0, tRot0, tScl0);
-          if (tsp > d.u32(1)) pEval = applyParentTransform(pEval, tPos1, tRot1, tScl1);
-          if (tsp > d.u32(2)) pEval = applyParentTransform(pEval, tPos2, tRot2, tScl2);
-          if (tsp > d.u32(3)) pEval = applyParentTransform(pEval, tPos3, tRot3, tScl3);
-          if (tsp > d.u32(4)) pEval = applyParentTransform(pEval, tPos4, tRot4, tScl4);
-          if (tsp > d.u32(5)) pEval = applyParentTransform(pEval, tPos5, tRot5, tScl5);
-          if (tsp > d.u32(6)) pEval = applyParentTransform(pEval, tPos6, tRot6, tScl6);
-          if (tsp > d.u32(7)) pEval = applyParentTransform(pEval, tPos7, tRot7, tScl7);
-          if (tsp > d.u32(8)) pEval = applyParentTransform(pEval, tPos8, tRot8, tScl8);
-          if (tsp > d.u32(9)) pEval = applyParentTransform(pEval, tPos9, tRot9, tScl9);
-          if (tsp > d.u32(10)) pEval = applyParentTransform(pEval, tPos10, tRot10, tScl10);
-          if (tsp > d.u32(11)) pEval = applyParentTransform(pEval, tPos11, tRot11, tScl11);
-          if (tsp > d.u32(12)) pEval = applyParentTransform(pEval, tPos12, tRot12, tScl12);
-          if (tsp > d.u32(13)) pEval = applyParentTransform(pEval, tPos13, tRot13, tScl13);
-          if (tsp > d.u32(14)) pEval = applyParentTransform(pEval, tPos14, tRot14, tScl14);
-          if (tsp > d.u32(15)) pEval = applyParentTransform(pEval, tPos15, tRot15, tScl15);
+          if (tsp > d.u32(0))
+            pEval = applyParentTransform(pEval, tPos0, tRot0, tScl0);
+          if (tsp > d.u32(1))
+            pEval = applyParentTransform(pEval, tPos1, tRot1, tScl1);
+          if (tsp > d.u32(2))
+            pEval = applyParentTransform(pEval, tPos2, tRot2, tScl2);
+          if (tsp > d.u32(3))
+            pEval = applyParentTransform(pEval, tPos3, tRot3, tScl3);
+          if (tsp > d.u32(4))
+            pEval = applyParentTransform(pEval, tPos4, tRot4, tScl4);
+          if (tsp > d.u32(5))
+            pEval = applyParentTransform(pEval, tPos5, tRot5, tScl5);
+          if (tsp > d.u32(6))
+            pEval = applyParentTransform(pEval, tPos6, tRot6, tScl6);
+          if (tsp > d.u32(7))
+            pEval = applyParentTransform(pEval, tPos7, tRot7, tScl7);
+          if (tsp > d.u32(8))
+            pEval = applyParentTransform(pEval, tPos8, tRot8, tScl8);
+          if (tsp > d.u32(9))
+            pEval = applyParentTransform(pEval, tPos9, tRot9, tScl9);
+          if (tsp > d.u32(10))
+            pEval = applyParentTransform(pEval, tPos10, tRot10, tScl10);
+          if (tsp > d.u32(11))
+            pEval = applyParentTransform(pEval, tPos11, tRot11, tScl11);
+          if (tsp > d.u32(12))
+            pEval = applyParentTransform(pEval, tPos12, tRot12, tScl12);
+          if (tsp > d.u32(13))
+            pEval = applyParentTransform(pEval, tPos13, tRot13, tScl13);
+          if (tsp > d.u32(14))
+            pEval = applyParentTransform(pEval, tPos14, tRot14, tScl14);
+          if (tsp > d.u32(15))
+            pEval = applyParentTransform(pEval, tPos15, tRot15, tScl15);
           const lp = applyInvRotXYZ(pEval - instr.position, instr.rotation);
           let val = evalShape(lp, instr.shapeType, instr.params);
           val = val * minVec3(accScl);
@@ -362,68 +388,196 @@ export function createShader(root: TgpuRoot) {
           sp += d.u32(1);
         } else if (instr.opcode === d.u32(2)) {
           if (tsp === d.u32(0)) {
-            tPos0 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot0 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos0 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot0 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl0 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(1)) {
-            tPos1 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot1 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos1 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot1 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl1 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(2)) {
-            tPos2 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot2 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos2 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot2 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl2 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(3)) {
-            tPos3 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot3 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos3 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot3 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl3 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(4)) {
-            tPos4 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot4 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos4 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot4 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl4 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(5)) {
-            tPos5 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot5 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos5 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot5 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl5 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(6)) {
-            tPos6 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot6 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos6 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot6 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl6 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(7)) {
-            tPos7 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot7 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos7 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot7 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl7 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(8)) {
-            tPos8 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot8 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos8 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot8 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl8 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(9)) {
-            tPos9 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot9 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos9 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot9 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl9 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(10)) {
-            tPos10 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot10 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos10 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot10 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl10 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(11)) {
-            tPos11 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot11 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos11 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot11 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl11 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(12)) {
-            tPos12 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot12 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos12 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot12 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl12 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(13)) {
-            tPos13 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot13 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos13 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot13 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl13 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(14)) {
-            tPos14 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot14 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos14 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot14 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl14 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           } else if (tsp === d.u32(15)) {
-            tPos15 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-            tRot15 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+            tPos15 = d.vec3f(
+              instr.position.x,
+              instr.position.y,
+              instr.position.z,
+            );
+            tRot15 = d.vec3f(
+              instr.rotation.x,
+              instr.rotation.y,
+              instr.rotation.z,
+            );
             tScl15 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
           }
           accScl = d.vec3f(
@@ -562,22 +716,38 @@ export function createShader(root: TgpuRoot) {
 
       if (instr.opcode === d.u32(0)) {
         let pEval = d.vec3f(p.x, p.y, p.z);
-        if (tsp > d.u32(0)) pEval = applyParentTransform(pEval, tPos0, tRot0, tScl0);
-        if (tsp > d.u32(1)) pEval = applyParentTransform(pEval, tPos1, tRot1, tScl1);
-        if (tsp > d.u32(2)) pEval = applyParentTransform(pEval, tPos2, tRot2, tScl2);
-        if (tsp > d.u32(3)) pEval = applyParentTransform(pEval, tPos3, tRot3, tScl3);
-        if (tsp > d.u32(4)) pEval = applyParentTransform(pEval, tPos4, tRot4, tScl4);
-        if (tsp > d.u32(5)) pEval = applyParentTransform(pEval, tPos5, tRot5, tScl5);
-        if (tsp > d.u32(6)) pEval = applyParentTransform(pEval, tPos6, tRot6, tScl6);
-        if (tsp > d.u32(7)) pEval = applyParentTransform(pEval, tPos7, tRot7, tScl7);
-        if (tsp > d.u32(8)) pEval = applyParentTransform(pEval, tPos8, tRot8, tScl8);
-        if (tsp > d.u32(9)) pEval = applyParentTransform(pEval, tPos9, tRot9, tScl9);
-        if (tsp > d.u32(10)) pEval = applyParentTransform(pEval, tPos10, tRot10, tScl10);
-        if (tsp > d.u32(11)) pEval = applyParentTransform(pEval, tPos11, tRot11, tScl11);
-        if (tsp > d.u32(12)) pEval = applyParentTransform(pEval, tPos12, tRot12, tScl12);
-        if (tsp > d.u32(13)) pEval = applyParentTransform(pEval, tPos13, tRot13, tScl13);
-        if (tsp > d.u32(14)) pEval = applyParentTransform(pEval, tPos14, tRot14, tScl14);
-        if (tsp > d.u32(15)) pEval = applyParentTransform(pEval, tPos15, tRot15, tScl15);
+        if (tsp > d.u32(0))
+          pEval = applyParentTransform(pEval, tPos0, tRot0, tScl0);
+        if (tsp > d.u32(1))
+          pEval = applyParentTransform(pEval, tPos1, tRot1, tScl1);
+        if (tsp > d.u32(2))
+          pEval = applyParentTransform(pEval, tPos2, tRot2, tScl2);
+        if (tsp > d.u32(3))
+          pEval = applyParentTransform(pEval, tPos3, tRot3, tScl3);
+        if (tsp > d.u32(4))
+          pEval = applyParentTransform(pEval, tPos4, tRot4, tScl4);
+        if (tsp > d.u32(5))
+          pEval = applyParentTransform(pEval, tPos5, tRot5, tScl5);
+        if (tsp > d.u32(6))
+          pEval = applyParentTransform(pEval, tPos6, tRot6, tScl6);
+        if (tsp > d.u32(7))
+          pEval = applyParentTransform(pEval, tPos7, tRot7, tScl7);
+        if (tsp > d.u32(8))
+          pEval = applyParentTransform(pEval, tPos8, tRot8, tScl8);
+        if (tsp > d.u32(9))
+          pEval = applyParentTransform(pEval, tPos9, tRot9, tScl9);
+        if (tsp > d.u32(10))
+          pEval = applyParentTransform(pEval, tPos10, tRot10, tScl10);
+        if (tsp > d.u32(11))
+          pEval = applyParentTransform(pEval, tPos11, tRot11, tScl11);
+        if (tsp > d.u32(12))
+          pEval = applyParentTransform(pEval, tPos12, tRot12, tScl12);
+        if (tsp > d.u32(13))
+          pEval = applyParentTransform(pEval, tPos13, tRot13, tScl13);
+        if (tsp > d.u32(14))
+          pEval = applyParentTransform(pEval, tPos14, tRot14, tScl14);
+        if (tsp > d.u32(15))
+          pEval = applyParentTransform(pEval, tPos15, tRot15, tScl15);
         const lp = applyInvRotXYZ(pEval - instr.position, instr.rotation);
         let val = evalShape(lp, instr.shapeType, instr.params);
         val = val * minVec3(accScl);
@@ -632,28 +802,76 @@ export function createShader(root: TgpuRoot) {
           tRot9 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
           tScl9 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
         } else if (tsp === d.u32(10)) {
-          tPos10 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-          tRot10 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+          tPos10 = d.vec3f(
+            instr.position.x,
+            instr.position.y,
+            instr.position.z,
+          );
+          tRot10 = d.vec3f(
+            instr.rotation.x,
+            instr.rotation.y,
+            instr.rotation.z,
+          );
           tScl10 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
         } else if (tsp === d.u32(11)) {
-          tPos11 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-          tRot11 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+          tPos11 = d.vec3f(
+            instr.position.x,
+            instr.position.y,
+            instr.position.z,
+          );
+          tRot11 = d.vec3f(
+            instr.rotation.x,
+            instr.rotation.y,
+            instr.rotation.z,
+          );
           tScl11 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
         } else if (tsp === d.u32(12)) {
-          tPos12 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-          tRot12 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+          tPos12 = d.vec3f(
+            instr.position.x,
+            instr.position.y,
+            instr.position.z,
+          );
+          tRot12 = d.vec3f(
+            instr.rotation.x,
+            instr.rotation.y,
+            instr.rotation.z,
+          );
           tScl12 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
         } else if (tsp === d.u32(13)) {
-          tPos13 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-          tRot13 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+          tPos13 = d.vec3f(
+            instr.position.x,
+            instr.position.y,
+            instr.position.z,
+          );
+          tRot13 = d.vec3f(
+            instr.rotation.x,
+            instr.rotation.y,
+            instr.rotation.z,
+          );
           tScl13 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
         } else if (tsp === d.u32(14)) {
-          tPos14 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-          tRot14 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+          tPos14 = d.vec3f(
+            instr.position.x,
+            instr.position.y,
+            instr.position.z,
+          );
+          tRot14 = d.vec3f(
+            instr.rotation.x,
+            instr.rotation.y,
+            instr.rotation.z,
+          );
           tScl14 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
         } else if (tsp === d.u32(15)) {
-          tPos15 = d.vec3f(instr.position.x, instr.position.y, instr.position.z);
-          tRot15 = d.vec3f(instr.rotation.x, instr.rotation.y, instr.rotation.z);
+          tPos15 = d.vec3f(
+            instr.position.x,
+            instr.position.y,
+            instr.position.z,
+          );
+          tRot15 = d.vec3f(
+            instr.rotation.x,
+            instr.rotation.y,
+            instr.rotation.z,
+          );
           tScl15 = d.vec3f(instr.params.x, instr.params.y, instr.params.z);
         }
         accScl = d.vec3f(
@@ -719,13 +937,43 @@ export function createShader(root: TgpuRoot) {
     return s0;
   };
 
-  // Raymarch a thin inflated shell around the selected subtree (sdSelection = OUTLINE_OFFSET).
+  const evalSelectionDist = (p: d.v3f): number => {
+    "use gpu";
+    if (selectionUsesSceneSdfUniform.$ === d.u32(1)) {
+      return sdScene(p);
+    }
+    return sdSelection(p);
+  };
+
+  // Rim + creases on the inflated selection shell.
+  const selectionOutlineMask = (p: d.v3f, rd: d.v3f): number => {
+    "use gpu";
+    const e = 0.001;
+    const dx =
+      evalSelectionDist(p + d.vec3f(e, 0.0, 0.0)) -
+      evalSelectionDist(p - d.vec3f(e, 0.0, 0.0));
+    const dy =
+      evalSelectionDist(p + d.vec3f(0.0, e, 0.0)) -
+      evalSelectionDist(p - d.vec3f(0.0, e, 0.0));
+    const dz =
+      evalSelectionDist(p + d.vec3f(0.0, 0.0, e)) -
+      evalSelectionDist(p - d.vec3f(0.0, 0.0, e));
+    const grad = d.vec3f(dx, dy, dz);
+    const N = std.normalize(grad);
+    const gradMag = std.length(grad) / (2.0 * e);
+    const viewDir = std.normalize(d.vec3f(-rd.x, -rd.y, -rd.z));
+    const rim = std.pow(1.0 - std.abs(std.dot(N, viewDir)), OUTLINE_RIM_POWER);
+    const gradEdge = std.smoothstep(OUTLINE_GRAD_LO, OUTLINE_GRAD_HI, gradMag);
+    const edge = std.max(rim, gradEdge);
+    return std.smoothstep(OUTLINE_EDGE_LO, OUTLINE_EDGE_HI, edge);
+  };
+
   const rayMarchSelectionOutline = (ro: d.v3f, rd: d.v3f): number => {
     "use gpu";
     let t = d.f32(0.0);
-    for (let i = d.f32(0.0); i < d.f32(48.0); i += d.f32(1.0)) {
+    for (let i = d.f32(0.0); i < d.f32(24.0); i += d.f32(1.0)) {
       const p = ro + rd * t;
-      const dSel = sdSelection(p);
+      const dSel = evalSelectionDist(p);
       const dist = std.abs(dSel - OUTLINE_OFFSET) - OUTLINE_BAND;
       t += dist;
       if (dist < 0.0001 || t > 100.0) {
@@ -733,51 +981,6 @@ export function createShader(root: TgpuRoot) {
       }
     }
     return t;
-  };
-
-  const selectionGradMag = (p: d.v3f): number => {
-    "use gpu";
-    const e = 0.001;
-    const dx =
-      sdSelection(p + d.vec3f(e, 0.0, 0.0)) -
-      sdSelection(p - d.vec3f(e, 0.0, 0.0));
-    const dy =
-      sdSelection(p + d.vec3f(0.0, e, 0.0)) -
-      sdSelection(p - d.vec3f(0.0, e, 0.0));
-    const dz =
-      sdSelection(p + d.vec3f(0.0, 0.0, e)) -
-      sdSelection(p - d.vec3f(0.0, 0.0, e));
-    return std.length(d.vec3f(dx, dy, dz)) / (2.0 * e);
-  };
-
-  const calcSelectionNormal = (p: d.v3f): d.v3f => {
-    "use gpu";
-    const e = 0.001;
-    const dx =
-      sdSelection(p + d.vec3f(e, 0.0, 0.0)) -
-      sdSelection(p - d.vec3f(e, 0.0, 0.0));
-    const dy =
-      sdSelection(p + d.vec3f(0.0, e, 0.0)) -
-      sdSelection(p - d.vec3f(0.0, e, 0.0));
-    const dz =
-      sdSelection(p + d.vec3f(0.0, 0.0, e)) -
-      sdSelection(p - d.vec3f(0.0, 0.0, e));
-    return std.normalize(d.vec3f(dx, dy, dz));
-  };
-
-  // Silhouette rim + geometric creases — thin line, not a filled shell.
-  const selectionOutlineMask = (p: d.v3f, rd: d.v3f): number => {
-    "use gpu";
-    const viewDir = std.normalize(d.vec3f(-rd.x, -rd.y, -rd.z));
-    const N = calcSelectionNormal(p);
-    const rim = std.pow(1.0 - std.abs(std.dot(N, viewDir)), OUTLINE_RIM_POWER);
-    const gradEdge = std.smoothstep(
-      OUTLINE_GRAD_LO,
-      OUTLINE_GRAD_HI,
-      selectionGradMag(p),
-    );
-    const edge = std.max(rim, gradEdge);
-    return std.smoothstep(OUTLINE_EDGE_LO, OUTLINE_EDGE_HI, edge);
   };
 
   const selectionOutlineColor = (): d.v3f => {
@@ -847,13 +1050,14 @@ export function createShader(root: TgpuRoot) {
     const iterations = sceneResult.y;
     const mode = renderModeUniform.$;
 
+    const sceneHit = tScene <= RAY_MISS_T;
+
     let tOutline = d.f32(RAY_MISS_T + 1.0);
     if (selectionEnabledUniform.$ === d.u32(1)) {
       tOutline = rayMarchSelectionOutline(ro, rd);
     }
 
     const outlineHit = tOutline <= RAY_MISS_T;
-    const sceneHit = tScene <= RAY_MISS_T;
     const outlineVisible =
       selectionEnabledUniform.$ === d.u32(1) &&
       outlineHit &&
@@ -924,5 +1128,6 @@ export function createShader(root: TgpuRoot) {
     selectionInstructionsBuffer,
     selectionCountUniform,
     selectionEnabledUniform,
+    selectionUsesSceneSdfUniform,
   };
 }
