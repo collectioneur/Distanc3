@@ -279,6 +279,8 @@ interface SceneState {
   root: SceneRoot;
   selectedContainerId: string;
   selectedItemId: string | null;
+  /** True when Scene root is explicitly selected (not deselected). */
+  rootSelected: boolean;
   counters: Record<ShapeType, number>;
   groupCounter: number;
 
@@ -302,6 +304,7 @@ interface SceneState {
   ) => void;
   updateRootName: (name: string) => void;
   selectRoot: () => void;
+  deselect: () => void;
   selectItem: (containerId: string, itemId: string) => void;
 }
 
@@ -314,6 +317,7 @@ export const useSceneStore = create<SceneState>()(
       root: _initialRoot,
       selectedContainerId: _initialRoot.id,
       selectedItemId: null,
+      rootSelected: false,
       counters: _saved.counters ?? {
         sphere: 0,
         box: 0,
@@ -353,6 +357,7 @@ export const useSceneStore = create<SceneState>()(
           counters: { ...state.counters, [shapeType]: count },
           selectedContainerId: containerId,
           selectedItemId: newLayer.id,
+          rootSelected: false,
         });
         return true;
       },
@@ -388,6 +393,7 @@ export const useSceneStore = create<SceneState>()(
           groupCounter: count,
           selectedContainerId: newGroup.id,
           selectedItemId: newGroup.id,
+          rootSelected: false,
         });
         return true;
       },
@@ -410,6 +416,7 @@ export const useSceneStore = create<SceneState>()(
             selectedContainerId: stillSelected
               ? state.selectedContainerId
               : newRoot.id,
+            rootSelected: stillSelected ? state.rootSelected : false,
           };
         }),
 
@@ -438,6 +445,14 @@ export const useSceneStore = create<SceneState>()(
         set((state) => ({
           selectedContainerId: state.root.id,
           selectedItemId: null,
+          rootSelected: true,
+        })),
+
+      deselect: () =>
+        set((state) => ({
+          selectedContainerId: state.root.id,
+          selectedItemId: null,
+          rootSelected: false,
         })),
 
       selectItem: (_containerId, itemId) =>
@@ -451,6 +466,7 @@ export const useSceneStore = create<SceneState>()(
           return {
             selectedContainerId,
             selectedItemId: itemId,
+            rootSelected: false,
           };
         }),
 
@@ -484,7 +500,12 @@ export const useSceneStore = create<SceneState>()(
           selectedItemId = dragIds[0];
         }
 
-        set({ root: newRoot, selectedContainerId, selectedItemId });
+        set({
+          root: newRoot,
+          selectedContainerId,
+          selectedItemId,
+          rootSelected: false,
+        });
         return true;
       },
 
@@ -531,11 +552,19 @@ if (_saved.root?.items?.length) {
 export function undoScene() {
   temporalStore.getState().undo();
   const root = useSceneStore.getState().root;
-  useSceneStore.setState({ selectedContainerId: root.id, selectedItemId: null });
+  useSceneStore.setState({
+    selectedContainerId: root.id,
+    selectedItemId: null,
+    rootSelected: false,
+  });
 }
 
 export function redoScene() {
   temporalStore.getState().redo();
   const root = useSceneStore.getState().root;
-  useSceneStore.setState({ selectedContainerId: root.id, selectedItemId: null });
+  useSceneStore.setState({
+    selectedContainerId: root.id,
+    selectedItemId: null,
+    rootSelected: false,
+  });
 }

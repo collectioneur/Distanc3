@@ -304,6 +304,7 @@ function LayerProperties({
 export default function RightPanel() {
   const root = useSceneStore((s) => s.root);
   const selectedItemId = useSceneStore((s) => s.selectedItemId);
+  const rootSelected = useSceneStore((s) => s.rootSelected);
 
   const found = selectedItemId ? findItem(root, selectedItemId) : null;
 
@@ -322,8 +323,13 @@ export default function RightPanel() {
   } else if (found?.item.kind === "group") {
     title = found.item.name;
     content = <GroupProperties group={found.item} itemIndex={found.index} />;
-  } else {
+  } else if (rootSelected) {
     content = <RootProperties />;
+  } else {
+    title = "Properties";
+    content = (
+      <p className="scene-object-empty">Nothing selected — click an object in the viewport or scene tree.</p>
+    );
   }
 
   return (

@@ -161,6 +161,7 @@ function buildGpuData(root: SceneRoot): {
 function buildSelectionGpuData(
   root: SceneRoot,
   selectedItemId: string | null,
+  rootSelected: boolean,
 ): {
   instructions: InstructionData[];
   count: number;
@@ -170,7 +171,7 @@ function buildSelectionGpuData(
   const instructions: InstructionData[] = [];
 
   if (!selectedItemId) {
-    const enabled = root.items.length > 0;
+    const enabled = rootSelected && root.items.length > 0;
 
     while (instructions.length < MAX_INSTRUCTIONS) {
       instructions.push(EMPTY_INSTRUCTION);
@@ -341,6 +342,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
 
       let lastRenderMode = -1;
       let lastSelectedItemId: string | null = null;
+      let lastRootSelected = false;
       let sceneGpuDirty = true;
       let pickInProgress = false;
 
@@ -385,11 +387,11 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           );
           pickReadbackBuffer.unmap();
 
-          const { root: sceneRoot, selectItem, selectRoot } =
+          const { root: sceneRoot, selectItem, deselect } =
             useSceneStore.getState();
 
           if (pickId === 0) {
-            selectRoot();
+            deselect();
             return;
           }
 
@@ -479,14 +481,23 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       let lastFrameTime = 0;
       let lastRoot: SceneRoot | null = null;
 
-      function uploadSceneGpu(sceneRoot: SceneRoot, selectedItemId: string | null, renderMode: number) {
+      function uploadSceneGpu(
+        sceneRoot: SceneRoot,
+        selectedItemId: string | null,
+        rootSelected: boolean,
+        renderMode: number,
+      ) {
         const { instructions, objectInfos, objectCount } = buildGpuData(sceneRoot);
         instructionsBuffer.write(instructions);
         objectInfoBuffer.write(objectInfos);
         objectCountUniform.write(objectCount);
         renderModeUniform.write(renderMode);
 
-        const selection = buildSelectionGpuData(sceneRoot, selectedItemId);
+        const selection = buildSelectionGpuData(
+          sceneRoot,
+          selectedItemId,
+          rootSelected,
+        );
         selectionInstructionsBuffer.write(selection.instructions);
         selectionCountUniform.write(selection.count);
         selectionEnabledUniform.write(selection.enabled ? 1 : 0);
@@ -503,11 +514,13 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       uploadSceneGpu(
         initialState.root,
         initialState.selectedItemId,
+        initialState.rootSelected,
         useRenderStore.getState().renderMode,
       );
       lastRoot = initialState.root;
       lastRenderMode = useRenderStore.getState().renderMode;
       lastSelectedItemId = initialState.selectedItemId;
+      lastRootSelected = initialState.rootSelected;
 
       function frame(now: number) {
         if (pickInProgress) {
@@ -521,20 +534,23 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         }
         lastFrameTime = now;
 
-        const { root: sceneRoot, selectedItemId } = useSceneStore.getState();
+        const { root: sceneRoot, selectedItemId, rootSelected } =
+          useSceneStore.getState();
         const renderMode = useRenderStore.getState().renderMode;
 
         if (
           sceneGpuDirty ||
           sceneRoot !== lastRoot ||
           renderMode !== lastRenderMode ||
-          selectedItemId !== lastSelectedItemId
+          selectedItemId !== lastSelectedItemId ||
+          rootSelected !== lastRootSelected
         ) {
-          uploadSceneGpu(sceneRoot, selectedItemId, renderMode);
+          uploadSceneGpu(sceneRoot, selectedItemId, rootSelected, renderMode);
 
           lastRoot = sceneRoot;
           lastRenderMode = renderMode;
           lastSelectedItemId = selectedItemId;
+          lastRootSelected = rootSelected;
           sceneGpuDirty = false;
         }
 

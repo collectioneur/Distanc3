@@ -181,8 +181,9 @@ function SceneRootHeader({
 }) {
   const root = useSceneStore((s) => s.root);
   const selectedItemId = useSceneStore((s) => s.selectedItemId);
+  const rootSelected = useSceneStore((s) => s.rootSelected);
   const selectRoot = useSceneStore((s) => s.selectRoot);
-  const hasRootSelection = selectedItemId === null;
+  const hasRootSelection = rootSelected && selectedItemId === null;
 
   return (
     <div className="scene-object scene-object--root">
