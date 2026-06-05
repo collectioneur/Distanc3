@@ -43,8 +43,12 @@ export type SceneRoot = {
 export type SceneContainer = SceneRoot | ObjectGroup;
 
 export const MAX_INSTRUCTIONS = 256;
-/** GPU objectInfo buffer slots — only root slot [0] is used. */
+/** GPU objectInfo buffer slots — only root slot [0] is used for scene render. */
 export const MAX_GPU_OBJECTS = 8;
+/** Max pickable scene items (IDs encoded in 1 byte: 1–255). */
+export const MAX_PICK_OBJECTS = 255;
+/** Packed instruction capacity for the pick CSG buffer (separate from scene). */
+export const MAX_PICK_INSTRUCTIONS = 1024;
 /** Max nested group transform stack depth in shader. */
 export const MAX_TRANSFORM_DEPTH = 16;
 

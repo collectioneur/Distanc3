@@ -4,6 +4,8 @@ import {
   createShader,
   MAX_GPU_OBJECTS,
   MAX_INSTRUCTIONS,
+  MAX_PICK_INSTRUCTIONS,
+  MAX_PICK_OBJECTS,
   OPCODE_OP,
   OPCODE_PUSH_SHAPE,
   OPCODE_TRANSFORM_POP,
@@ -188,22 +190,7 @@ function buildSelectionGpuData(
     return { instructions, count: 0, enabled: false, usesSceneSdf: false };
   }
 
-  const ancestors = getAncestorGroups(root, found.container.id);
-  for (const group of ancestors) {
-    pushTransformPush(group, instructions);
-  }
-
-  if (found.item.kind === "layer") {
-    pushShapeInstruction(found.item, instructions);
-  } else if (found.item.items.length > 0) {
-    pushTransformPush(found.item, instructions);
-    compileItems(found.item.items, instructions);
-    pushTransformPop(instructions);
-  }
-
-  for (let i = ancestors.length - 1; i >= 0; i--) {
-    pushTransformPop(instructions);
-  }
+  compileItemSubtreeInstructions(root, selectedItemId, instructions);
 
   const count = instructions.length;
 
@@ -214,17 +201,47 @@ function buildSelectionGpuData(
   return { instructions, count, enabled: count > 0, usesSceneSdf: false };
 }
 
-function compilePickItem(item: SceneItem, out: InstructionData[]): void {
-  if (item.kind === "layer") {
-    pushShapeInstruction(item, out);
-  } else if (item.items.length > 0) {
-    pushTransformPush(item, out);
-    compileItems(item.items, out);
+/** Compile one scene item's CSG subtree with ancestor transforms (for selection + pick). */
+function compileItemSubtreeInstructions(
+  root: SceneRoot,
+  itemId: string,
+  out: InstructionData[],
+): boolean {
+  const found = findItem(root, itemId);
+  if (!found) return false;
+  if (found.item.kind === "group" && found.item.items.length === 0) return false;
+
+  const ancestors = getAncestorGroups(root, found.container.id);
+  for (const group of ancestors) {
+    pushTransformPush(group, out);
+  }
+
+  if (found.item.kind === "layer") {
+    pushShapeInstruction(found.item, out);
+  } else {
+    pushTransformPush(found.item, out);
+    compileItems(found.item.items, out);
     pushTransformPop(out);
+  }
+
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    pushTransformPop(out);
+  }
+
+  return true;
+}
+
+/** Canvas pick: layers only. Groups are selected from the hierarchy panel. */
+function collectPickableLayerIds(items: SceneItem[], out: string[]): void {
+  for (const item of items) {
+    if (item.kind === "layer") {
+      out.push(item.id);
+    } else if (item.items.length > 0) {
+      collectPickableLayerIds(item.items, out);
+    }
   }
 }
 
-/** MVP: one pick slot per top-level scene item (max MAX_GPU_OBJECTS). */
 function buildPickGpuData(root: SceneRoot): {
   instructions: InstructionData[];
   objectInfos: ObjectInfoData[];
@@ -235,25 +252,30 @@ function buildPickGpuData(root: SceneRoot): {
   const objectInfos: ObjectInfoData[] = [];
   const itemIds: string[] = [];
 
-  for (const item of root.items) {
-    if (item.kind === "group" && item.items.length === 0) continue;
+  const pickIds: string[] = [];
+  collectPickableLayerIds(root.items, pickIds);
+
+  for (const id of pickIds) {
+    if (itemIds.length >= MAX_PICK_OBJECTS) break;
+
+    const slot: InstructionData[] = [];
+    if (!compileItemSubtreeInstructions(root, id, slot) || slot.length === 0) {
+      continue;
+    }
+    if (instructions.length + slot.length > MAX_PICK_INSTRUCTIONS) break;
 
     const start = instructions.length;
-    compilePickItem(item, instructions);
-    if (instructions.length === start) continue;
-
-    objectInfos.push({ start, count: instructions.length - start });
-    itemIds.push(item.id);
-
-    if (itemIds.length >= MAX_GPU_OBJECTS) break;
+    instructions.push(...slot);
+    objectInfos.push({ start, count: slot.length });
+    itemIds.push(id);
   }
 
   const objectCount = objectInfos.length;
 
-  while (instructions.length < MAX_INSTRUCTIONS) {
+  while (instructions.length < MAX_PICK_INSTRUCTIONS) {
     instructions.push(EMPTY_INSTRUCTION);
   }
-  while (objectInfos.length < MAX_GPU_OBJECTS) {
+  while (objectInfos.length < MAX_PICK_OBJECTS) {
     objectInfos.push(EMPTY_OBJECT_INFO);
   }
 
@@ -399,11 +421,9 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           if (!itemId) return;
 
           const found = findItem(sceneRoot, itemId);
-          if (!found) return;
+          if (!found || found.item.kind !== "layer") return;
 
-          const containerId =
-            found.item.kind === "group" ? found.item.id : found.container.id;
-          selectItem(containerId, itemId);
+          selectItem(found.container.id, itemId);
         } finally {
           pickPassUniform.write(0);
           pickInProgress = false;

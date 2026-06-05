@@ -3,12 +3,20 @@ import { fullScreenTriangle } from "typegpu/common";
 import {
   MAX_GPU_OBJECTS,
   MAX_INSTRUCTIONS,
+  MAX_PICK_INSTRUCTIONS,
+  MAX_PICK_OBJECTS,
   MAX_TRANSFORM_DEPTH,
 } from "../store/sceneStore";
 
 type TgpuRoot = Awaited<ReturnType<typeof tgpu.init>>;
 
-export { MAX_GPU_OBJECTS, MAX_INSTRUCTIONS, MAX_TRANSFORM_DEPTH };
+export {
+  MAX_GPU_OBJECTS,
+  MAX_INSTRUCTIONS,
+  MAX_PICK_INSTRUCTIONS,
+  MAX_PICK_OBJECTS,
+  MAX_TRANSFORM_DEPTH,
+};
 
 export const OPCODE_PUSH_SHAPE = 0;
 export const OPCODE_OP = 1;
@@ -77,6 +85,8 @@ const OUTLINE_GRAD_HI = 1.45;
 const OUTLINE_EDGE_LO = 0.25;
 const OUTLINE_EDGE_HI = 0.85;
 const RAY_MISS_T = 50.0;
+/** Surface tie epsilon for pick — prefer smaller CSG subtree (more specific item). */
+const PICK_TIE_EPS = 0.002;
 
 /** Fragment shader mode: ray-march scene and output pick object id (1 byte in R). */
 export const RENDER_MODE_PICK = 3;
@@ -114,15 +124,15 @@ export function createShader(root: TgpuRoot) {
   const pickPassUniform = root.createUniform(d.u32, 0);
 
   const pickInstructionsBuffer = root.createReadonly(
-    d.arrayOf(Instruction, MAX_INSTRUCTIONS),
-    Array.from({ length: MAX_INSTRUCTIONS }, () => ({
+    d.arrayOf(Instruction, MAX_PICK_INSTRUCTIONS),
+    Array.from({ length: MAX_PICK_INSTRUCTIONS }, () => ({
       ...emptyInstruction,
     })),
   );
 
   const pickObjectInfoBuffer = root.createReadonly(
-    d.arrayOf(ObjectInfo, MAX_GPU_OBJECTS),
-    Array.from({ length: MAX_GPU_OBJECTS }, () => ({ ...emptyObjectInfo })),
+    d.arrayOf(ObjectInfo, MAX_PICK_OBJECTS),
+    Array.from({ length: MAX_PICK_OBJECTS }, () => ({ ...emptyObjectInfo })),
   );
 
   // ── SDF primitives ────────────────────────────────────────────────────────
@@ -1268,14 +1278,19 @@ export function createShader(root: TgpuRoot) {
     "use gpu";
     let bestId = d.u32(0);
     let bestDist = d.f32(1e9);
+    let bestCount = d.u32(0xffffffff);
     const n = pickObjectCountUniform.$;
     for (let o = d.u32(0); o < n; o += d.u32(1)) {
       const info = pickObjectInfoBuffer.$[o];
       const dval = evalPickInstructionRange(p, info.start, info.count);
       const ad = std.abs(dval);
-      if (ad < bestDist) {
+      const closer = ad < bestDist;
+      const tiedCloser =
+        ad <= bestDist + PICK_TIE_EPS && info.count < bestCount;
+      if (closer || tiedCloser) {
         bestDist = ad;
         bestId = o + d.u32(1);
+        bestCount = info.count;
       }
     }
     return bestId;
