@@ -10,6 +10,7 @@ import {
   OPCODE_PUSH_SHAPE,
   OPCODE_TRANSFORM_POP,
   OPCODE_TRANSFORM_PUSH,
+  PICK_PASS_GIZMO,
   SHAPE_TYPE_INT,
   OP_TYPE_INT,
 } from "./shader";
@@ -17,6 +18,7 @@ import {
   useSceneStore,
   findItem,
   getAncestorGroups,
+  temporalStore,
   type ObjectGroup,
   type OpType,
   type SceneItem,
@@ -24,6 +26,29 @@ import {
   type ShapeLayer,
 } from "../store/sceneStore";
 import { useRenderStore } from "../store/renderStore";
+import {
+  clientToPickPixel,
+  computeCameraRayFromClient,
+  getCanvasAspect,
+} from "./camera";
+import {
+  axisDeltaFromScreenDrag,
+  beginAxisScreenDrag,
+  getGizmoWorldPosition,
+  getItemAncestorGroups,
+  GIZMO_ARROW_LENGTH_RATIO,
+  gizmoVisualScaleForDistance,
+  hitTestTranslateGizmoScreen,
+  stabilizeGizmoHoverAxis,
+  worldToItemLocalPosition,
+  type AxisScreenDragState,
+  type GizmoAxis,
+} from "./gizmo";
+
+type GizmoGpuPickResult = {
+  axis: GizmoAxis | null;
+  skipped: boolean;
+};
 
 type InstructionData = {
   opcode: number;
@@ -285,8 +310,37 @@ function buildPickGpuData(root: SceneRoot): {
 const DRAG_THRESHOLD_PX = 4;
 const PICK_READBACK_BYTES_PER_ROW = 256;
 
+const GIZMO_AXIS_DIR: Record<GizmoAxis, [number, number, number]> = {
+  x: [1, 0, 0],
+  y: [0, 1, 0],
+  z: [0, 0, 1],
+};
+
+const GIZMO_AXIS_ID: Record<GizmoAxis, number> = {
+  x: 1,
+  y: 2,
+  z: 3,
+};
+
+function axisIdToCursor(axis: GizmoAxis | null): string {
+  if (!axis) return "default";
+  if (axis === "x") return "ew-resize";
+  if (axis === "y") return "ns-resize";
+  return "nwse-resize";
+}
+
 function readPickIdFromBytes(data: Uint8Array): number {
   return Math.max(data[0] ?? 0, data[1] ?? 0, data[2] ?? 0);
+}
+
+const PICK_AXIS_ID: Record<number, GizmoAxis> = {
+  1: "x",
+  2: "y",
+  3: "z",
+};
+
+function axisFromPickByte(pickId: number): GizmoAxis | null {
+  return PICK_AXIS_ID[pickId] ?? null;
 }
 
 export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
@@ -311,23 +365,16 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
 
       const {
         pipeline,
-        timeUniform,
-        aspectUniform,
-        mouseUniform,
-        distanceUniform,
+        cameraUniforms,
+        sceneUniforms,
+        selectionUniforms,
+        gizmoUniforms,
         instructionsBuffer,
         objectInfoBuffer,
-        objectCountUniform,
-        renderModeUniform,
         selectionInstructionsBuffer,
-        selectionCountUniform,
-        selectionEnabledUniform,
-        selectionUsesSceneSdfUniform,
         pickInstructionsBuffer,
         pickObjectInfoBuffer,
-        pickObjectCountUniform,
-        pickUvUniform,
-        pickPassUniform,
+        pickUniforms,
       } = createShader(root);
 
       const pickFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -361,12 +408,334 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       let rotX = 0.3;
       let rotY = -0.4;
       let distance = 2.5;
+      /** Live orbit preview while dragging; cleared on pointer up. */
+      let orbitPreviewMouse: ReturnType<typeof d.vec2f> | null = null;
+      let orbitPreviewRot: [number, number] | null = null;
+
+      function getCameraRot(): [number, number] {
+        return orbitPreviewRot ?? [rotX, rotY];
+      }
+
+      function cameraRayFromClient(
+        clientX: number,
+        clientY: number,
+      ) {
+        const [rx, ry] = getCameraRot();
+        return computeCameraRayFromClient(
+          clientX,
+          clientY,
+          canvas!,
+          rx,
+          ry,
+          distance,
+        );
+      }
 
       let lastRenderMode = -1;
       let lastSelectedItemId: string | null = null;
       let lastRootSelected = false;
       let sceneGpuDirty = true;
       let pickInProgress = false;
+
+      let gizmoDragging = false;
+      let gizmoHoverAxis: GizmoAxis | null = null;
+      let gizmoDragAxis: GizmoAxis | null = null;
+      let gizmoDragStartWorld: [number, number, number] | null = null;
+      let gizmoDragScreen: AxisScreenDragState | null = null;
+      let gizmoDragItemId: string | null = null;
+      let gizmoDragAncestors: ObjectGroup[] | null = null;
+      let cachedPickObjectCount = 0;
+
+      let hoverGpuSeq = 0;
+      let hoverPickRunning = false;
+      let pendingHoverPick: {
+        x: number;
+        y: number;
+        seq: number;
+      } | null = null;
+
+      function updateGizmoUniforms(
+        sceneRoot: SceneRoot,
+        selectedItemId: string | null,
+        cameraDistance: number,
+        activeAxis: GizmoAxis | null,
+      ) {
+        if (!selectedItemId) {
+          gizmoUniforms.write({
+            enabled: 0,
+            activeAxis: 0,
+            position: d.vec3f(0, 0, 0),
+            _pad: 0,
+            scale: 0,
+          });
+          return;
+        }
+
+        const pivotWorld = getGizmoWorldPosition(sceneRoot, selectedItemId);
+        if (!pivotWorld) {
+          gizmoUniforms.write({
+            enabled: 0,
+            activeAxis: 0,
+            position: d.vec3f(0, 0, 0),
+            _pad: 0,
+            scale: 0,
+          });
+          return;
+        }
+
+        const visualScale = gizmoVisualScaleForDistance(cameraDistance);
+        gizmoUniforms.write({
+          enabled: 1,
+          activeAxis: activeAxis ? GIZMO_AXIS_ID[activeAxis] : 0,
+          position: d.vec3f(pivotWorld[0], pivotWorld[1], pivotWorld[2]),
+          _pad: 0,
+          scale: visualScale,
+        });
+      }
+
+      function setItemWorldPosition(
+        itemId: string,
+        worldPos: [number, number, number],
+        ancestors: ObjectGroup[],
+      ) {
+        const found = findItem(useSceneStore.getState().root, itemId);
+        if (!found) return;
+
+        const localPos = worldToItemLocalPosition(worldPos, ancestors);
+        const { updateLayer, updateGroup } = useSceneStore.getState();
+
+        if (found.item.kind === "layer") {
+          updateLayer(found.container.id, found.item.id, { position: localPos });
+        } else {
+          updateGroup(found.item.id, { position: localPos });
+        }
+      }
+
+      async function pickGizmoAxisGpu(
+        clientX: number,
+        clientY: number,
+      ): Promise<GizmoGpuPickResult> {
+        if (pickInProgress) return { axis: null, skipped: true };
+
+        const { root: sceneRoot, selectedItemId } = useSceneStore.getState();
+        if (!selectedItemId) return { axis: null, skipped: false };
+
+        pickInProgress = true;
+        try {
+          syncCameraUniform();
+          updateGizmoUniforms(
+            sceneRoot,
+            selectedItemId,
+            distance,
+            gizmoHoverAxis,
+          );
+
+          const pickPixel = clientToPickPixel(clientX, clientY, canvas!);
+          if (!pickPixel) return { axis: null, skipped: false };
+
+          pickUniforms.write({ objectCount: 0, pickPass: PICK_PASS_GIZMO });
+
+          const encoder = root.device.createCommandEncoder();
+          pipeline
+            .with(encoder)
+            .withColorAttachment({ view: pickTextureView })
+            .draw(3);
+          encoder.copyTextureToBuffer(
+            { texture: pickTexture, origin: { x: pickPixel.x, y: pickPixel.y, z: 0 } },
+            {
+              buffer: pickReadbackBuffer,
+              bytesPerRow: PICK_READBACK_BYTES_PER_ROW,
+            },
+            { width: 1, height: 1 },
+          );
+          root.device.queue.submit([encoder.finish()]);
+          await root.device.queue.onSubmittedWorkDone();
+
+          await pickReadbackBuffer.mapAsync(GPUMapMode.READ);
+          const pickId = readPickIdFromBytes(
+            new Uint8Array(pickReadbackBuffer.getMappedRange()),
+          );
+          pickReadbackBuffer.unmap();
+
+          return { axis: axisFromPickByte(pickId), skipped: false };
+        } finally {
+          pickUniforms.write({
+            objectCount: cachedPickObjectCount,
+            pickPass: 0,
+          });
+          pickInProgress = false;
+        }
+      }
+
+      async function drainGizmoHoverPicks() {
+        if (hoverPickRunning) return;
+        hoverPickRunning = true;
+        try {
+          while (pendingHoverPick) {
+            const pick = pendingHoverPick;
+            pendingHoverPick = null;
+
+            let result = await pickGizmoAxisGpu(pick.x, pick.y);
+            while (result.skipped && pick.seq === hoverGpuSeq) {
+              pendingHoverPick = pendingHoverPick ?? pick;
+              await new Promise<void>((resolve) =>
+                requestAnimationFrame(() => resolve()),
+              );
+              if (pick.seq !== hoverGpuSeq) break;
+              const latest = pendingHoverPick ?? pick;
+              pendingHoverPick = null;
+              result = await pickGizmoAxisGpu(latest.x, latest.y);
+              if (latest.seq !== hoverGpuSeq) break;
+            }
+
+            if (pick.seq !== hoverGpuSeq) continue;
+            if (result.skipped) continue;
+
+            const { root: sceneRoot, selectedItemId } =
+              useSceneStore.getState();
+            if (!selectedItemId) {
+              gizmoHoverAxis = null;
+              canvas!.style.cursor = "default";
+              continue;
+            }
+
+            const pivotWorld = getGizmoWorldPosition(sceneRoot, selectedItemId);
+            if (!pivotWorld) {
+              gizmoHoverAxis = null;
+              canvas!.style.cursor = "default";
+              continue;
+            }
+
+            const [rx, ry] = getCameraRot();
+            const gizmoScale = gizmoVisualScaleForDistance(distance);
+            const stabilized = stabilizeGizmoHoverAxis(
+              pick.x,
+              pick.y,
+              canvas!,
+              rx,
+              ry,
+              distance,
+              pivotWorld,
+              gizmoScale,
+              result.axis,
+              gizmoHoverAxis,
+            );
+            gizmoHoverAxis = stabilized;
+            canvas!.style.cursor = axisIdToCursor(stabilized);
+          }
+        } finally {
+          hoverPickRunning = false;
+          if (pendingHoverPick) void drainGizmoHoverPicks();
+        }
+      }
+
+      async function tryStartGizmoDrag(
+        clientX: number,
+        clientY: number,
+      ): Promise<boolean> {
+        const { root: sceneRoot, selectedItemId } = useSceneStore.getState();
+        if (!selectedItemId) return false;
+
+        const pivotWorld = getGizmoWorldPosition(sceneRoot, selectedItemId);
+        const ancestors = getItemAncestorGroups(sceneRoot, selectedItemId);
+        if (!pivotWorld || !ancestors) return false;
+
+        const [rx, ry] = getCameraRot();
+        const cpuAxis = hitTestTranslateGizmoScreen(
+          clientX,
+          clientY,
+          canvas!,
+          rx,
+          ry,
+          distance,
+          pivotWorld,
+          gizmoVisualScaleForDistance(distance),
+        );
+        const gpuPick = await pickGizmoAxisGpu(clientX, clientY);
+        const gpuAxis = gpuPick.axis;
+        const axis = gpuAxis ?? cpuAxis;
+        if (!axis) return false;
+
+        const axisDir = GIZMO_AXIS_DIR[axis];
+        const gizmoScale = gizmoVisualScaleForDistance(distance);
+        const dragScreen = beginAxisScreenDrag(
+          clientX,
+          clientY,
+          canvas!,
+          rx,
+          ry,
+          distance,
+          pivotWorld,
+          axisDir,
+          gizmoScale * GIZMO_ARROW_LENGTH_RATIO,
+        );
+        if (!dragScreen) return false;
+
+        gizmoDragging = true;
+        gizmoDragAxis = axis;
+        gizmoDragItemId = selectedItemId;
+        gizmoDragAncestors = ancestors;
+        gizmoDragStartWorld = pivotWorld;
+        gizmoDragScreen = dragScreen;
+        gizmoHoverAxis = axis;
+        temporalStore.getState().pause();
+        canvas!.style.cursor = axisIdToCursor(axis);
+        return true;
+      }
+
+      function updateGizmoDrag(clientX: number, clientY: number) {
+        if (
+          !gizmoDragging ||
+          !gizmoDragAxis ||
+          !gizmoDragStartWorld ||
+          !gizmoDragScreen ||
+          !gizmoDragItemId ||
+          !gizmoDragAncestors
+        ) {
+          return;
+        }
+
+        const axisDir = GIZMO_AXIS_DIR[gizmoDragAxis];
+        const deltaT = axisDeltaFromScreenDrag(
+          clientX,
+          clientY,
+          gizmoDragScreen,
+          gizmoDragAxis,
+        );
+
+        const newPivot: [number, number, number] = [
+          gizmoDragStartWorld[0] + axisDir[0] * deltaT,
+          gizmoDragStartWorld[1] + axisDir[1] * deltaT,
+          gizmoDragStartWorld[2] + axisDir[2] * deltaT,
+        ];
+        setItemWorldPosition(gizmoDragItemId, newPivot, gizmoDragAncestors);
+      }
+
+      function endGizmoDrag() {
+        if (!gizmoDragging) return;
+        gizmoDragging = false;
+        gizmoDragAxis = null;
+        gizmoDragStartWorld = null;
+        gizmoDragScreen = null;
+        gizmoDragItemId = null;
+        gizmoDragAncestors = null;
+        temporalStore.getState().resume();
+      }
+
+      function updateGizmoHover(clientX: number, clientY: number) {
+        const { selectedItemId } = useSceneStore.getState();
+        if (!selectedItemId) {
+          hoverGpuSeq += 1;
+          pendingHoverPick = null;
+          gizmoHoverAxis = null;
+          canvas!.style.cursor = "default";
+          return;
+        }
+
+        const seq = ++hoverGpuSeq;
+        pendingHoverPick = { x: clientX, y: clientY, seq };
+        void drainGizmoHoverPicks();
+      }
 
       async function pickAt(clientX: number, clientY: number) {
         if (pickInProgress) return;
@@ -376,19 +745,15 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           const rect = canvas!.getBoundingClientRect();
           if (rect.width <= 0 || rect.height <= 0) return;
 
-          const u = (clientX - rect.left) / rect.width;
-          const v = 1 - (clientY - rect.top) / rect.height;
+          pickUniforms.write({
+            objectCount: cachedPickObjectCount,
+            pickPass: 1,
+          });
 
-          pickPassUniform.write(1);
-
-          const pickX = Math.min(
-            canvas!.width - 1,
-            Math.max(0, Math.floor(u * canvas!.width)),
-          );
-          const pickY = Math.min(
-            canvas!.height - 1,
-            Math.max(0, Math.floor((1 - v) * canvas!.height)),
-          );
+          const pickPixel = clientToPickPixel(clientX, clientY, canvas!);
+          if (!pickPixel) return;
+          const pickX = pickPixel.x;
+          const pickY = pickPixel.y;
 
           const encoder = root.device.createCommandEncoder();
           pipeline
@@ -425,42 +790,71 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
 
           selectItem(found.container.id, itemId);
         } finally {
-          pickPassUniform.write(0);
+          pickUniforms.write({
+            objectCount: cachedPickObjectCount,
+            pickPass: 0,
+          });
           pickInProgress = false;
         }
       }
 
       const onPointerDown = (e: PointerEvent) => {
         if (e.button !== 0) return;
-        pointerDown = true;
-        dragged = false;
-        dragStartX = e.clientX;
-        dragStartY = e.clientY;
+        void tryStartGizmoDrag(e.clientX, e.clientY).then((started) => {
+          if (started) return;
+          pointerDown = true;
+          dragged = false;
+          orbitPreviewMouse = null;
+          orbitPreviewRot = null;
+          dragStartX = e.clientX;
+          dragStartY = e.clientY;
+        });
       };
 
       const onPointerMove = (e: PointerEvent) => {
-        if (!pointerDown) return;
+        if (gizmoDragging) {
+          updateGizmoDrag(e.clientX, e.clientY);
+          return;
+        }
+
+        if (!pointerDown) {
+          updateGizmoHover(e.clientX, e.clientY);
+          return;
+        }
+
         const dx = e.clientX - dragStartX;
         const dy = e.clientY - dragStartY;
         if (!dragged && Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
           dragged = true;
+          canvas!.style.cursor = "grabbing";
         }
         if (!dragged) return;
         const totalDx =
           ((e.clientX - dragStartX) / window.innerWidth) * Math.PI * 2;
         const totalDy =
           ((e.clientY - dragStartY) / window.innerHeight) * Math.PI * 2;
-        mouseUniform.write(d.vec2f(rotX + totalDx, rotY + totalDy));
+        const previewRx = rotX + totalDx;
+        const previewRy = rotY + totalDy;
+        orbitPreviewRot = [previewRx, previewRy];
+        orbitPreviewMouse = d.vec2f(previewRx, previewRy);
       };
 
       const onPointerUp = (e: PointerEvent) => {
+        if (gizmoDragging && e.button === 0) {
+          endGizmoDrag();
+          updateGizmoHover(e.clientX, e.clientY);
+          return;
+        }
+
         if (!pointerDown || e.button !== 0) return;
         pointerDown = false;
 
         if (dragged) {
           rotX += ((e.clientX - dragStartX) / window.innerWidth) * Math.PI * 2;
           rotY += ((e.clientY - dragStartY) / window.innerHeight) * Math.PI * 2;
-          mouseUniform.write(d.vec2f(rotX, rotY));
+          orbitPreviewMouse = null;
+          orbitPreviewRot = null;
+          updateGizmoHover(e.clientX, e.clientY);
         } else {
           void pickAt(e.clientX, e.clientY);
         }
@@ -473,7 +867,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           0.5,
           Math.min(20.0, distance * Math.exp(px * 0.0001)),
         );
-        distanceUniform.write(distance);
+        syncCameraUniform();
       };
 
       canvas.addEventListener("pointerdown", onPointerDown);
@@ -486,17 +880,28 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         canvas!.width = canvas!.clientWidth * dpr;
         canvas!.height = canvas!.clientHeight * dpr;
         if (canvas!.width > 0 && canvas!.height > 0) {
-          aspectUniform.write(canvas!.width / canvas!.height);
           resizePickTarget(canvas!.width, canvas!.height);
+          syncCameraUniform();
         }
+      }
+
+      const startTime = performance.now();
+
+      function syncCameraUniform() {
+        const mouse = orbitPreviewMouse ?? d.vec2f(rotX, rotY);
+        const aspect = getCanvasAspect(canvas!);
+        cameraUniforms.write({
+          time: (performance.now() - startTime) / 1000,
+          aspect,
+          mouse,
+          distance,
+        });
       }
 
       updateSize();
 
       const observer = new ResizeObserver(updateSize);
       observer.observe(canvas);
-
-      const startTime = performance.now();
       const TARGET_MS = 1000 / 60;
       let lastFrameTime = 0;
       let lastRoot: SceneRoot | null = null;
@@ -510,8 +915,10 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         const { instructions, objectInfos, objectCount } = buildGpuData(sceneRoot);
         instructionsBuffer.write(instructions);
         objectInfoBuffer.write(objectInfos);
-        objectCountUniform.write(objectCount);
-        renderModeUniform.write(renderMode);
+        sceneUniforms.write({
+          objectCount,
+          renderMode,
+        });
 
         const selection = buildSelectionGpuData(
           sceneRoot,
@@ -519,14 +926,20 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           rootSelected,
         );
         selectionInstructionsBuffer.write(selection.instructions);
-        selectionCountUniform.write(selection.count);
-        selectionEnabledUniform.write(selection.enabled ? 1 : 0);
-        selectionUsesSceneSdfUniform.write(selection.usesSceneSdf ? 1 : 0);
+        selectionUniforms.write({
+          enabled: selection.enabled ? 1 : 0,
+          usesSceneSdf: selection.usesSceneSdf ? 1 : 0,
+          count: selection.count,
+        });
 
         const pick = buildPickGpuData(sceneRoot);
         pickInstructionsBuffer.write(pick.instructions);
         pickObjectInfoBuffer.write(pick.objectInfos);
-        pickObjectCountUniform.write(pick.objectCount);
+        cachedPickObjectCount = pick.objectCount;
+        pickUniforms.write({
+          objectCount: cachedPickObjectCount,
+          pickPass: 0,
+        });
         pickItemIds = pick.itemIds;
       }
 
@@ -574,7 +987,12 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           sceneGpuDirty = false;
         }
 
-        timeUniform.write((performance.now() - startTime) / 1000);
+        const activeGizmoAxis = gizmoDragging
+          ? gizmoDragAxis
+          : gizmoHoverAxis;
+        updateGizmoUniforms(sceneRoot, selectedItemId, distance, activeGizmoAxis);
+
+        syncCameraUniform();
         pipeline.withColorAttachment({ view: context }).draw(3);
         animFrameId = requestAnimationFrame(frame);
       }

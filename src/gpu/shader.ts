@@ -60,6 +60,37 @@ const ObjectInfo = d.struct({
   count: d.u32, // number of instructions for this object
 });
 
+const CameraUniforms = d.struct({
+  time: d.f32,
+  aspect: d.f32,
+  mouse: d.vec2f,
+  distance: d.f32,
+});
+
+const SceneUniforms = d.struct({
+  objectCount: d.u32,
+  renderMode: d.u32,
+});
+
+const SelectionUniforms = d.struct({
+  enabled: d.u32,
+  usesSceneSdf: d.u32,
+  count: d.u32,
+});
+
+const GizmoUniforms = d.struct({
+  enabled: d.u32,
+  activeAxis: d.u32,
+  position: d.vec3f,
+  _pad: d.f32,
+  scale: d.f32,
+});
+
+const PickUniforms = d.struct({
+  objectCount: d.u32,
+  pickPass: d.u32,
+});
+
 const TOTAL_INSTRUCTIONS = MAX_INSTRUCTIONS;
 
 const emptyInstruction = {
@@ -90,17 +121,32 @@ const PICK_TIE_EPS = 0.002;
 
 /** Fragment shader mode: ray-march scene and output pick object id (1 byte in R). */
 export const RENDER_MODE_PICK = 3;
+/** Pick pass: ray-march translate gizmo, output axis id 1/2/3 in R. */
+export const PICK_PASS_GIZMO = 2;
 
 export function createShader(root: TgpuRoot) {
-  const timeUniform = root.createUniform(d.f32, 0);
-  const aspectUniform = root.createUniform(d.f32, 1);
-  const mouseUniform = root.createUniform(d.vec2f, d.vec2f(0.3, -0.4));
-  const distanceUniform = root.createUniform(d.f32, 2.5);
-  const objectCountUniform = root.createUniform(d.u32, 0);
-  const renderModeUniform = root.createUniform(d.u32, 0);
-  const selectionEnabledUniform = root.createUniform(d.u32, 0);
-  const selectionUsesSceneSdfUniform = root.createUniform(d.u32, 0);
-  const selectionCountUniform = root.createUniform(d.u32, 0);
+  const cameraUniforms = root.createUniform(CameraUniforms, {
+    time: 0,
+    aspect: 1,
+    mouse: d.vec2f(0.3, -0.4),
+    distance: 2.5,
+  });
+  const sceneUniforms = root.createUniform(SceneUniforms, {
+    objectCount: 0,
+    renderMode: 0,
+  });
+  const selectionUniforms = root.createUniform(SelectionUniforms, {
+    enabled: 0,
+    usesSceneSdf: 0,
+    count: 0,
+  });
+  const gizmoUniforms = root.createUniform(GizmoUniforms, {
+    enabled: 0,
+    activeAxis: 0,
+    position: d.vec3f(0.0, 0.0, 0.0),
+    _pad: 0,
+    scale: 0.3,
+  });
 
   const instructionsBuffer = root.createReadonly(
     d.arrayOf(Instruction, TOTAL_INSTRUCTIONS),
@@ -119,9 +165,10 @@ export function createShader(root: TgpuRoot) {
     })),
   );
 
-  const pickObjectCountUniform = root.createUniform(d.u32, 0);
-  const pickUvUniform = root.createUniform(d.vec2f, d.vec2f(0.5, 0.5));
-  const pickPassUniform = root.createUniform(d.u32, 0);
+  const pickUniforms = root.createUniform(PickUniforms, {
+    objectCount: 0,
+    pickPass: 0,
+  });
 
   const pickInstructionsBuffer = root.createReadonly(
     d.arrayOf(Instruction, MAX_PICK_INSTRUCTIONS),
@@ -349,7 +396,7 @@ export function createShader(root: TgpuRoot) {
     let tsp = d.u32(0);
     let accScl = d.vec3f(1.0, 1.0, 1.0);
 
-    const objCount = objectCountUniform.$;
+    const objCount = sceneUniforms.$.objectCount;
     for (let o = d.u32(0); o < objCount; o += d.u32(1)) {
       s0 = d.f32(0.0);
       s1 = d.f32(0.0);
@@ -975,7 +1022,7 @@ export function createShader(root: TgpuRoot) {
     return evalSelectionInstructionRange(
       p,
       d.u32(0),
-      selectionCountUniform.$,
+      selectionUniforms.$.count,
     );
   };
 
@@ -1279,7 +1326,7 @@ export function createShader(root: TgpuRoot) {
     let bestId = d.u32(0);
     let bestDist = d.f32(1e9);
     let bestCount = d.u32(0xffffffff);
-    const n = pickObjectCountUniform.$;
+    const n = pickUniforms.$.objectCount;
     for (let o = d.u32(0); o < n; o += d.u32(1)) {
       const info = pickObjectInfoBuffer.$[o];
       const dval = evalPickInstructionRange(p, info.start, info.count);
@@ -1298,7 +1345,7 @@ export function createShader(root: TgpuRoot) {
 
   const evalSelectionDist = (p: d.v3f): number => {
     "use gpu";
-    if (selectionUsesSceneSdfUniform.$ === d.u32(1)) {
+    if (selectionUniforms.$.usesSceneSdf === d.u32(1)) {
       return sdScene(p);
     }
     return sdSelection(p);
@@ -1344,9 +1391,104 @@ export function createShader(root: TgpuRoot) {
 
   const selectionOutlineColor = (): d.v3f => {
     "use gpu";
-    const pulse = 0.75 + 0.25 * std.sin(timeUniform.$ * 2.5);
+    const pulse = 0.75 + 0.25 * std.sin(cameraUniforms.$.time * 2.5);
     const v = pulse * OUTLINE_STRENGTH;
     return d.vec3f(v, v, v);
+  };
+
+  const GIZMO_ARROW_LEN = 0.85;
+  const GIZMO_SHAFT_R = 0.035;
+  const GIZMO_HEAD_R = 0.08;
+  const GIZMO_HEAD_LEN = 0.18;
+
+  const sdCapsuleSeg = (p: d.v3f, a: d.v3f, b: d.v3f, r: number): number => {
+    "use gpu";
+    const pa = p - a;
+    const ba = b - a;
+    const h = std.clamp(std.dot(pa, ba) / std.dot(ba, ba), 0.0, 1.0);
+    return std.length(pa - ba * h) - r;
+  };
+
+  const sdAxisArrow = (gp: d.v3f, dir: d.v3f, s: number): number => {
+    "use gpu";
+    const arrowLen = s * GIZMO_ARROW_LEN;
+    const shaftR = s * GIZMO_SHAFT_R;
+    const headR = s * GIZMO_HEAD_R;
+    const headLen = s * GIZMO_HEAD_LEN;
+    const tip = dir * arrowLen;
+    const shaftEnd = dir * (arrowLen - headLen);
+    const dShaft = sdCapsuleSeg(gp, d.vec3f(0.0), shaftEnd, shaftR);
+    const dHead = std.length(gp - tip) - headR;
+    return std.min(dShaft, dHead);
+  };
+
+  const evalTranslateGizmo = (p: d.v3f): d.v2f => {
+    "use gpu";
+    const origin = gizmoUniforms.$.position;
+    const s = gizmoUniforms.$.scale;
+    const gp = p - origin;
+    const dx = sdAxisArrow(gp, d.vec3f(1.0, 0.0, 0.0), s);
+    const dy = sdAxisArrow(gp, d.vec3f(0.0, 1.0, 0.0), s);
+    const dz = sdAxisArrow(gp, d.vec3f(0.0, 0.0, 1.0), s);
+    let best = dx;
+    let axis = d.f32(1.0);
+    if (dy < best) {
+      best = dy;
+      axis = d.f32(2.0);
+    }
+    if (dz < best) {
+      best = dz;
+      axis = d.f32(3.0);
+    }
+    return d.vec2f(best, axis);
+  };
+
+  const gizmoAxisColor = (axis: number): d.v3f => {
+    "use gpu";
+    const active = gizmoUniforms.$.activeAxis;
+    const axisId = d.u32(std.round(axis));
+    const isActive =
+      (active === d.u32(1) && axisId === d.u32(1)) ||
+      (active === d.u32(2) && axisId === d.u32(2)) ||
+      (active === d.u32(3) && axisId === d.u32(3));
+    let boost = d.f32(1.0);
+    if (isActive) {
+      boost = d.f32(1.35);
+    }
+    if (axisId === d.u32(1)) {
+      return d.vec3f(1.0, 0.28, 0.28) * boost;
+    }
+    if (axisId === d.u32(2)) {
+      return d.vec3f(0.28, 1.0, 0.28) * boost;
+    }
+    return d.vec3f(0.35, 0.55, 1.0) * boost;
+  };
+
+  const GIZMO_HIT_EPS = 0.00015;
+
+  const rayMarchGizmo = (ro: d.v3f, rd: d.v3f): d.v2f => {
+    "use gpu";
+    let t = d.f32(0.0);
+    let hitAxis = d.f32(0.0);
+    let converged = false;
+    for (let i = d.f32(0.0); i < d.f32(32.0); i += d.f32(1.0)) {
+      const p = ro + rd * t;
+      const g = evalTranslateGizmo(p);
+      const dist = g.x;
+      hitAxis = g.y;
+      if (dist < GIZMO_HIT_EPS) {
+        converged = true;
+        break;
+      }
+      t += dist * 0.85;
+      if (t > 100.0) {
+        break;
+      }
+    }
+    if (!converged) {
+      return d.vec2f(RAY_MISS_T + 1.0, 0.0);
+    }
+    return d.vec2f(t, hitAxis);
   };
 
   const calcNormal = (p: d.v3f): d.v3f => {
@@ -1387,27 +1529,41 @@ export function createShader(root: TgpuRoot) {
   const fragment = ({ uv }: { uv: d.v2f }) => {
     "use gpu";
 
-    const mode = renderModeUniform.$;
-    const isPickPass = pickPassUniform.$ === d.u32(1);
+    const mode = sceneUniforms.$.renderMode;
+    const pickPass = pickUniforms.$.pickPass;
+    const isScenePickPass = pickPass === d.u32(1);
+    const isGizmoPickPass = pickPass === d.u32(2);
     const sampleUv = d.vec2f(uv.x, uv.y);
     const uvn = sampleUv * 2.0 - d.vec2f(1.0, 1.0);
-    const uvCorrected = d.vec2f(uvn.x * aspectUniform.$, uvn.y);
-    let ro = d.vec3f(0, 0, 0 - distanceUniform.$);
+    const uvCorrected = d.vec2f(uvn.x * cameraUniforms.$.aspect, uvn.y);
+    let ro = d.vec3f(0, 0, 0 - cameraUniforms.$.distance);
     let rd = std.normalize(d.vec3f(uvCorrected.x, uvCorrected.y, 1.0));
 
-    const rotH = rot2D(mouseUniform.$.x);
+    const rotH = rot2D(cameraUniforms.$.mouse.x);
     const roXZ = rotH * d.vec2f(ro.x, ro.z);
     ro = d.vec3f(roXZ.x, ro.y, roXZ.y);
     const rdXZ = rotH * d.vec2f(rd.x, rd.z);
     rd = d.vec3f(rdXZ.x, rd.y, rdXZ.y);
 
-    const rotV = rot2D(mouseUniform.$.y);
+    const rotV = rot2D(cameraUniforms.$.mouse.y);
     const roYZ = rotV * d.vec2f(ro.y, ro.z);
     ro = d.vec3f(ro.x, roYZ.x, roYZ.y);
     const rdYZ = rotV * d.vec2f(rd.y, rd.z);
     rd = d.vec3f(rd.x, rdYZ.x, rdYZ.y);
 
-    if (isPickPass) {
+    if (isGizmoPickPass) {
+      if (gizmoUniforms.$.enabled !== d.u32(1)) {
+        return d.vec4f(0.0, 0.0, 0.0, 0.0);
+      }
+      const gizmoPick = rayMarchGizmo(ro, rd);
+      if (gizmoPick.x > RAY_MISS_T) {
+        return d.vec4f(0.0, 0.0, 0.0, 0.0);
+      }
+      const idNorm = gizmoPick.y / 255.0;
+      return d.vec4f(idNorm, idNorm, idNorm, 1.0);
+    }
+
+    if (isScenePickPass) {
       const tPick = rayMarch(ro, rd).x;
       if (tPick > RAY_MISS_T) {
         return d.vec4f(0.0, 0.0, 0.0, 0.0);
@@ -1426,13 +1582,13 @@ export function createShader(root: TgpuRoot) {
     const sceneHit = tScene <= RAY_MISS_T;
 
     let tOutline = d.f32(RAY_MISS_T + 1.0);
-    if (selectionEnabledUniform.$ === d.u32(1)) {
+    if (selectionUniforms.$.enabled === d.u32(1)) {
       tOutline = rayMarchSelectionOutline(ro, rd);
     }
 
     const outlineHit = tOutline <= RAY_MISS_T;
     const outlineVisible =
-      selectionEnabledUniform.$ === d.u32(1) &&
+      selectionUniforms.$.enabled === d.u32(1) &&
       outlineHit &&
       (!sceneHit || tOutline < tScene - 0.0001);
 
@@ -1480,6 +1636,31 @@ export function createShader(root: TgpuRoot) {
       col = col + selectionOutlineColor() * edge;
     }
 
+    if (gizmoUniforms.$.enabled === d.u32(1)) {
+      const gizmoResult = rayMarchGizmo(ro, rd);
+      const tGizmo = gizmoResult.x;
+      const gizmoHit = tGizmo <= RAY_MISS_T;
+      if (gizmoHit) {
+        const gizmoPos = ro + rd * tGizmo;
+        const eps = 0.001;
+        const gx =
+          evalTranslateGizmo(gizmoPos + d.vec3f(eps, 0.0, 0.0)).x -
+          evalTranslateGizmo(gizmoPos - d.vec3f(eps, 0.0, 0.0)).x;
+        const gy =
+          evalTranslateGizmo(gizmoPos + d.vec3f(0.0, eps, 0.0)).x -
+          evalTranslateGizmo(gizmoPos - d.vec3f(0.0, eps, 0.0)).x;
+        const gz =
+          evalTranslateGizmo(gizmoPos + d.vec3f(0.0, 0.0, eps)).x -
+          evalTranslateGizmo(gizmoPos - d.vec3f(0.0, 0.0, eps)).x;
+        const gN = std.normalize(d.vec3f(gx, gy, gz));
+        const viewDir = std.normalize(d.vec3f(-rd.x, -rd.y, -rd.z));
+        const rim = std.pow(1.0 - std.abs(std.dot(gN, viewDir)), 1.5) * 0.35;
+        const axisCol = gizmoAxisColor(gizmoResult.y);
+        const gizmoLit = axisCol * (0.85 + rim);
+        col = std.mix(col, gizmoLit, d.f32(0.92));
+      }
+    }
+
     return d.vec4f(col, 1.0);
   };
 
@@ -1490,22 +1671,15 @@ export function createShader(root: TgpuRoot) {
 
   return {
     pipeline,
-    timeUniform,
-    aspectUniform,
-    mouseUniform,
-    distanceUniform,
+    cameraUniforms,
+    sceneUniforms,
+    selectionUniforms,
+    gizmoUniforms,
     instructionsBuffer,
     objectInfoBuffer,
-    objectCountUniform,
-    renderModeUniform,
     selectionInstructionsBuffer,
-    selectionCountUniform,
-    selectionEnabledUniform,
-    selectionUsesSceneSdfUniform,
     pickInstructionsBuffer,
     pickObjectInfoBuffer,
-    pickObjectCountUniform,
-    pickUvUniform,
-    pickPassUniform,
+    pickUniforms,
   };
 }
