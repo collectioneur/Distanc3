@@ -190,10 +190,12 @@ canvas {
 /* ─── Left panel ─────────────────────────────────────────────── */
 
 .panel-left {
-  top: 50%;
-  transform: translateY(-50%);
   left: 12px;
+  top: 0;
+  bottom: 0;
+  margin-block: auto;
   width: 230px;
+  height: fit-content;
   max-height: 70vh;
   display: flex;
   flex-direction: column;
@@ -201,8 +203,38 @@ canvas {
 
 .scene-list {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
   padding: 6px 0;
+}
+
+.scene-list .react-arborist {
+  width: 100%;
+}
+
+.scene-item--editing {
+  padding-right: 8px;
+}
+
+.scene-item-rename-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #e8eaff;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid #6366f1;
+  border-radius: 3px;
+  padding: 2px 6px;
+  outline: none;
+}
+
+.scene-item-icon--spacer {
+  width: 20px;
+  flex-shrink: 0;
+}
+
+.scene-object--root {
+  margin-left: 0;
 }
 
 .scene-list::-webkit-scrollbar {

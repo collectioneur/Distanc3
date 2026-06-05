@@ -1,13 +1,21 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Tree, type DragPreviewProps, type NodeRendererProps } from "react-arborist";
+import { useTreeApi } from "react-arborist/dist/module/context.js";
+import {
+  arboristChildrenAccessor,
+  canDropAt,
+  rootItemsToArborist,
+  type ArboristNode,
+} from "../../scene/arboristAdapter";
+import { useElementSize } from "../../hooks/useElementSize";
 import {
   useSceneStore,
   findContainer,
+  findItem,
   wouldExceedCap,
   wouldExceedDepth,
-  type ObjectGroup,
   type OpType,
-  type SceneItem,
-  type ShapeLayer,
 } from "../../store/sceneStore";
 import { showToast } from "../../utils/toast";
 
@@ -29,172 +37,166 @@ const OP_ICON: Record<OpType, string> = {
   sIntersect: "~∩",
 };
 
-function LayerRow({
-  layer,
-  containerId,
-  showOp,
-  depth,
-}: {
-  layer: ShapeLayer;
-  containerId: string;
-  showOp: boolean;
-  depth: number;
-}) {
-  const selectedItemId = useSceneStore((s) => s.selectedItemId);
-  const selectItem = useSceneStore((s) => s.selectItem);
+function SceneNode({
+  node,
+  style,
+  dragHandle,
+  preview,
+}: NodeRendererProps<ArboristNode>) {
+  const root = useSceneStore((s) => s.root);
   const removeItem = useSceneStore((s) => s.removeItem);
+  const data = node.data;
+  const showOp = node.childIndex > 0;
+  const isGroup = data.kind === "group";
 
-  const isSelected = selectedItemId === layer.id;
+  const containerId = useMemo(() => {
+    const found = findItem(root, data.id);
+    return found?.container.id ?? root.id;
+  }, [root, data.id]);
+
+  if (node.isEditing && !preview) {
+    return (
+      <div ref={dragHandle} style={style} className="scene-item scene-item--editing">
+        <NodeRenameInput node={node} />
+      </div>
+    );
+  }
 
   return (
     <div
-      className={`scene-item${isSelected ? " scene-item--selected" : ""}`}
-      style={{ paddingLeft: 8 + depth * 12 }}
-      onClick={() => selectItem(containerId, layer.id)}
+      ref={preview ? undefined : dragHandle}
+      style={style}
+      className={`scene-item${!preview && node.isSelected ? " scene-item--selected" : ""}`}
+      onClick={preview ? undefined : node.handleClick}
     >
-      <span className="scene-item-icon">{SHAPE_ICON[layer.shapeType]}</span>
-      <span className="scene-item-name">{layer.name}</span>
-      {showOp && (
-        <span className="scene-item-icon scene-item-icon--op" title={layer.op}>
-          {OP_ICON[layer.op]}
-        </span>
-      )}
-      <button
-        className="scene-item-remove"
-        title="Remove shape"
-        onClick={(e) => {
-          e.stopPropagation();
-          removeItem(containerId, layer.id);
-        }}
-      >
-        ×
-      </button>
-    </div>
-  );
-}
-
-function GroupRow({
-  group,
-  parentContainerId,
-  showOp,
-  depth,
-}: {
-  group: ObjectGroup;
-  parentContainerId: string;
-  showOp: boolean;
-  depth: number;
-}) {
-  const [collapsed, setCollapsed] = useState(false);
-  const selectedItemId = useSceneStore((s) => s.selectedItemId);
-  const selectItem = useSceneStore((s) => s.selectItem);
-  const removeItem = useSceneStore((s) => s.removeItem);
-
-  const isSelected = selectedItemId === group.id;
-
-  return (
-    <div className="scene-object" style={{ marginLeft: depth * 12 }}>
-      <div
-        className={`scene-object-header scene-item${isSelected ? " scene-item--selected" : ""}`}
-        style={{ paddingLeft: 8 }}
-        onClick={() => selectItem(parentContainerId, group.id)}
-      >
+      {isGroup && (
         <button
+          type="button"
           className="scene-object-collapse"
           onClick={(e) => {
             e.stopPropagation();
-            setCollapsed((c) => !c);
+            node.toggle();
           }}
-          title={collapsed ? "Expand" : "Collapse"}
+          title={node.isOpen ? "Collapse" : "Expand"}
         >
-          {collapsed ? "▶" : "▼"}
+          {node.isOpen ? "▼" : "▶"}
         </button>
-        <span className="scene-item-icon">◫</span>
-        <span className="scene-object-name">{group.name}</span>
-        {showOp && (
-          <span className="scene-item-icon scene-item-icon--op" title={group.op}>
-            {OP_ICON[group.op]}
-          </span>
-        )}
+      )}
+      {!isGroup && <span className="scene-item-icon scene-item-icon--spacer" />}
+      <span className="scene-item-icon">
+        {isGroup ? "◫" : SHAPE_ICON[data.shapeType ?? "sphere"]}
+      </span>
+      <span className="scene-item-name">{data.name}</span>
+      {showOp && (
+        <span className="scene-item-icon scene-item-icon--op" title={data.op}>
+          {OP_ICON[data.op]}
+        </span>
+      )}
+      {!preview && (
         <button
+          type="button"
           className="scene-item-remove"
-          title="Remove object"
+          title={isGroup ? "Remove object" : "Remove shape"}
           onClick={(e) => {
             e.stopPropagation();
-            removeItem(parentContainerId, group.id);
+            removeItem(containerId, data.id);
           }}
         >
           ×
         </button>
-      </div>
-
-      {!collapsed && group.items.length > 0 && (
-        <div className="scene-object-nodes">
-          <ItemList containerId={group.id} items={group.items} depth={depth + 1} />
-        </div>
-      )}
-
-      {!collapsed && group.items.length === 0 && (
-        <p className="scene-object-empty" style={{ paddingLeft: 8 + (depth + 1) * 12 }}>
-          Empty — add shapes inside this object.
-        </p>
       )}
     </div>
   );
 }
 
-function ItemList({
-  containerId,
-  items,
-  depth,
-}: {
-  containerId: string;
-  items: SceneItem[];
-  depth: number;
-}) {
-  return (
-    <>
-      {items.map((item, index) =>
-        item.kind === "layer" ? (
-          <LayerRow
-            key={item.id}
-            layer={item}
-            containerId={containerId}
-            showOp={index > 0}
-            depth={depth}
-          />
-        ) : (
-          <GroupRow
-            key={item.id}
-            group={item}
-            parentContainerId={containerId}
-            showOp={index > 0}
-            depth={depth}
-          />
-        ),
-      )}
-    </>
+/** Portal to body: panel transform/backdrop-filter break position:fixed for the default preview. */
+function SceneDragPreview({ offset, id, isDragging }: DragPreviewProps) {
+  const tree = useTreeApi<ArboristNode>();
+
+  if (!isDragging || !offset || !id) return null;
+
+  const node = tree.get(id);
+  if (!node) return null;
+
+  const previewWidth = typeof tree.width === "number" ? tree.width : 218;
+
+  return createPortal(
+    <div
+      className="scene-drag-preview-layer"
+      style={{
+        position: "fixed",
+        left: 0,
+        top: 0,
+        zIndex: 10000,
+        pointerEvents: "none",
+        transform: `translate(${offset.x}px, ${offset.y}px)`,
+        width: previewWidth,
+      }}
+    >
+      <SceneNode
+        preview
+        node={node}
+        tree={tree}
+        style={{
+          paddingLeft: node.level * tree.indent,
+          opacity: 0.45,
+          width: "100%",
+        }}
+      />
+    </div>,
+    document.body,
   );
 }
 
-function SceneTree() {
-  const [collapsed, setCollapsed] = useState(false);
+function NodeRenameInput({ node }: { node: NodeRendererProps<ArboristNode>["node"] }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  return (
+    <input
+      ref={inputRef}
+      className="scene-item-rename-input"
+      defaultValue={node.data.name}
+      onFocus={(e) => e.currentTarget.select()}
+      onBlur={() => node.reset()}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") node.reset();
+        if (e.key === "Enter") node.submit(inputRef.current?.value ?? "");
+      }}
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
+}
+
+function SceneRootHeader({
+  collapsed,
+  onToggleCollapse,
+}: {
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+}) {
   const root = useSceneStore((s) => s.root);
   const selectedItemId = useSceneStore((s) => s.selectedItemId);
   const selectRoot = useSceneStore((s) => s.selectRoot);
-
   const hasRootSelection = selectedItemId === null;
 
   return (
-    <div className="scene-object">
+    <div className="scene-object scene-object--root">
       <div
-        className={`scene-object-header${hasRootSelection ? " scene-item--selected" : ""}`}
+        className={`scene-object-header scene-item${hasRootSelection ? " scene-item--selected" : ""}`}
+        style={{ paddingLeft: 8 }}
         onClick={selectRoot}
       >
         <button
+          type="button"
           className="scene-object-collapse"
           onClick={(e) => {
             e.stopPropagation();
-            setCollapsed((c) => !c);
+            onToggleCollapse();
           }}
           title={collapsed ? "Expand" : "Collapse"}
         >
@@ -202,24 +204,24 @@ function SceneTree() {
         </button>
         <span className="scene-object-name">{root.name}</span>
       </div>
-
-      {!collapsed && root.items.length > 0 && (
-        <div className="scene-object-nodes">
-          <ItemList containerId={root.id} items={root.items} depth={0} />
-        </div>
-      )}
-
-      {!collapsed && root.items.length === 0 && (
-        <p className="scene-object-empty">Empty — add a shape from the top bar.</p>
-      )}
     </div>
   );
 }
 
 export default function LeftPanel() {
+  const [sceneCollapsed, setSceneCollapsed] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const { width, height } = useElementSize(listRef);
+
   const root = useSceneStore((s) => s.root);
+  const selectedItemId = useSceneStore((s) => s.selectedItemId);
   const selectedContainerId = useSceneStore((s) => s.selectedContainerId);
   const addGroupToContainer = useSceneStore((s) => s.addGroupToContainer);
+  const moveItems = useSceneStore((s) => s.moveItems);
+  const renameItem = useSceneStore((s) => s.renameItem);
+  const selectItem = useSceneStore((s) => s.selectItem);
+
+  const arboristData = useMemo(() => rootItemsToArborist(root.items), [root.items]);
 
   const container = findContainer(root, selectedContainerId);
   const groupExtra = container && container.items.length > 0 ? 1 : 0;
@@ -241,14 +243,70 @@ export default function LeftPanel() {
     }
   }
 
+  function syncSelection(nodes: { id: string; data: ArboristNode }[]) {
+    if (nodes.length === 0) return;
+    const id = nodes[0].id;
+    const found = findItem(root, id);
+    if (!found) return;
+    const containerId =
+      found.item.kind === "group" ? found.item.id : found.container.id;
+    selectItem(containerId, id);
+  }
+
   return (
     <div className="panel panel-left">
       <div className="panel-header">Scene</div>
-      <div className="scene-list">
-        <SceneTree />
+      <SceneRootHeader
+        collapsed={sceneCollapsed}
+        onToggleCollapse={() => setSceneCollapsed((c) => !c)}
+      />
+      <div className="scene-list" ref={listRef}>
+        {!sceneCollapsed && root.items.length === 0 && (
+          <p className="scene-object-empty">Empty — add a shape from the top bar.</p>
+        )}
+        {!sceneCollapsed && root.items.length > 0 && width > 0 && height > 0 && (
+          <Tree<ArboristNode>
+            data={arboristData}
+            width={width}
+            height={height}
+            indent={12}
+            rowHeight={32}
+            openByDefault
+            dndRootElement={document.body}
+            renderDragPreview={SceneDragPreview}
+            selection={selectedItemId ?? undefined}
+            disableMultiSelection
+            idAccessor="id"
+            childrenAccessor={arboristChildrenAccessor}
+            onMove={({ dragIds, parentId, index }) => {
+              moveItems(dragIds, parentId, index);
+            }}
+            onRename={({ id, name }) => {
+              renameItem(id, name);
+            }}
+            onSelect={(nodes) => syncSelection(nodes)}
+            onActivate={(node) => syncSelection([node])}
+            disableDrop={({ parentNode, dragNodes }) => {
+              const dragIds = dragNodes.map((n) => n.id);
+              const parentData = parentNode.isRoot
+                ? null
+                : (parentNode.data as ArboristNode);
+              return !canDropAt(
+                root,
+                dragIds,
+                parentNode.isRoot ? null : parentNode.id,
+                parentData,
+                parentNode.isRoot,
+              );
+            }}
+          >
+            {SceneNode}
+          </Tree>
+        )}
       </div>
       <div className="scene-add-object">
         <button
+          type="button"
           className="add-object-btn"
           onClick={handleAddGroup}
           disabled={capExceeded || depthExceeded}

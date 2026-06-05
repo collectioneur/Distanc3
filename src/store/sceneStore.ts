@@ -1,7 +1,9 @@
 import { create } from "zustand";
 import { shallow } from "zustand/shallow";
 import { temporal } from "zundo";
+import { applyMoveToRoot } from "../scene/arboristAdapter";
 import { loadInitialState } from "./persistence";
+import { showToast } from "../utils/toast";
 
 export type ShapeType = "sphere" | "box" | "torus" | "cylinder" | "capsule" | "cone";
 export type OpType = "union" | "subtract" | "intersect" | "sUnion" | "sSubtract" | "sIntersect";
@@ -121,7 +123,7 @@ function getContainerDepthInItems(
   return -1;
 }
 
-function getContainerDepth(root: SceneRoot, containerId: string): number {
+export function getContainerDepth(root: SceneRoot, containerId: string): number {
   if (root.id === containerId) return 0;
   return getContainerDepthInItems(root.items, containerId, 0);
 }
@@ -286,8 +288,12 @@ interface SceneState {
   updateLayer: (
     containerId: string,
     layerId: string,
-    patch: Partial<Pick<ShapeLayer, "position" | "rotation" | "params" | "op" | "smoothK">>,
+    patch: Partial<
+      Pick<ShapeLayer, "name" | "position" | "rotation" | "params" | "op" | "smoothK">
+    >,
   ) => void;
+  moveItems: (dragIds: string[], parentId: string | null, index: number) => boolean;
+  renameItem: (itemId: string, name: string) => void;
   updateGroup: (
     groupId: string,
     patch: Partial<
@@ -447,6 +453,62 @@ export const useSceneStore = create<SceneState>()(
             selectedItemId: itemId,
           };
         }),
+
+      moveItems: (dragIds, parentId, index) => {
+        const state = get();
+        const result = applyMoveToRoot(state.root, dragIds, parentId, index);
+        if ("reason" in result) {
+          if (result.reason === "cycle") {
+            showToast("Cannot move into itself or its children");
+          } else if (result.reason === "depth") {
+            showToast("Nesting too deep (max 16 levels)");
+          } else if (result.reason === "invalid_parent") {
+            showToast("Invalid drop target");
+          }
+          return false;
+        }
+
+        const newRoot = result.root;
+        let selectedContainerId = state.selectedContainerId;
+        let selectedItemId = state.selectedItemId;
+
+        if (state.selectedItemId && findItem(newRoot, state.selectedItemId)) {
+          const found = findItem(newRoot, state.selectedItemId)!;
+          selectedContainerId =
+            found.item.kind === "group" ? found.item.id : found.container.id;
+          selectedItemId = state.selectedItemId;
+        } else if (dragIds.length > 0 && findItem(newRoot, dragIds[0])) {
+          const found = findItem(newRoot, dragIds[0])!;
+          selectedContainerId =
+            found.item.kind === "group" ? found.item.id : found.container.id;
+          selectedItemId = dragIds[0];
+        }
+
+        set({ root: newRoot, selectedContainerId, selectedItemId });
+        return true;
+      },
+
+      renameItem: (itemId, name) => {
+        const state = get();
+        const found = findItem(state.root, itemId);
+        if (!found) return;
+
+        if (found.item.kind === "layer") {
+          set({
+            root: mapRootContainer(state.root, found.container.id, (items) =>
+              items.map((item) =>
+                item.kind === "layer" && item.id === itemId ? { ...item, name } : item,
+              ),
+            ),
+          });
+        } else {
+          set({
+            root: mapRootItem(state.root, itemId, (item) =>
+              item.kind === "group" ? { ...item, name } : item,
+            ),
+          });
+        }
+      },
     }),
     {
       partialize: (state) => ({

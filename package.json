@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "react": "^19.0.0",
+    "react-arborist": "^3.8.0",
     "react-dom": "^19.0.0",
     "typegpu": "^0.11.4",
     "zundo": "^2.3.0",
