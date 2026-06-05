@@ -213,6 +213,59 @@ function buildSelectionGpuData(
   return { instructions, count, enabled: count > 0, usesSceneSdf: false };
 }
 
+function compilePickItem(item: SceneItem, out: InstructionData[]): void {
+  if (item.kind === "layer") {
+    pushShapeInstruction(item, out);
+  } else if (item.items.length > 0) {
+    pushTransformPush(item, out);
+    compileItems(item.items, out);
+    pushTransformPop(out);
+  }
+}
+
+/** MVP: one pick slot per top-level scene item (max MAX_GPU_OBJECTS). */
+function buildPickGpuData(root: SceneRoot): {
+  instructions: InstructionData[];
+  objectInfos: ObjectInfoData[];
+  objectCount: number;
+  itemIds: string[];
+} {
+  const instructions: InstructionData[] = [];
+  const objectInfos: ObjectInfoData[] = [];
+  const itemIds: string[] = [];
+
+  for (const item of root.items) {
+    if (item.kind === "group" && item.items.length === 0) continue;
+
+    const start = instructions.length;
+    compilePickItem(item, instructions);
+    if (instructions.length === start) continue;
+
+    objectInfos.push({ start, count: instructions.length - start });
+    itemIds.push(item.id);
+
+    if (itemIds.length >= MAX_GPU_OBJECTS) break;
+  }
+
+  const objectCount = objectInfos.length;
+
+  while (instructions.length < MAX_INSTRUCTIONS) {
+    instructions.push(EMPTY_INSTRUCTION);
+  }
+  while (objectInfos.length < MAX_GPU_OBJECTS) {
+    objectInfos.push(EMPTY_OBJECT_INFO);
+  }
+
+  return { instructions, objectInfos, objectCount, itemIds };
+}
+
+const DRAG_THRESHOLD_PX = 4;
+const PICK_READBACK_BYTES_PER_ROW = 256;
+
+function readPickIdFromBytes(data: Uint8Array): number {
+  return Math.max(data[0] ?? 0, data[1] ?? 0, data[2] ?? 0);
+}
+
 export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -247,34 +300,148 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         selectionCountUniform,
         selectionEnabledUniform,
         selectionUsesSceneSdfUniform,
+        pickInstructionsBuffer,
+        pickObjectInfoBuffer,
+        pickObjectCountUniform,
+        pickUvUniform,
+        pickPassUniform,
       } = createShader(root);
 
-      let isDragging = false;
+      const pickFormat = navigator.gpu.getPreferredCanvasFormat();
+      let pickTexture = root.device.createTexture({
+        size: [1, 1],
+        format: pickFormat,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+      });
+      let pickTextureView = pickTexture.createView();
+      const pickReadbackBuffer = root.device.createBuffer({
+        size: PICK_READBACK_BYTES_PER_ROW,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+
+      function resizePickTarget(width: number, height: number) {
+        pickTexture.destroy();
+        pickTexture = root.device.createTexture({
+          size: [width, height],
+          format: pickFormat,
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+        });
+        pickTextureView = pickTexture.createView();
+      }
+
+      let pickItemIds: string[] = [];
+
+      let pointerDown = false;
+      let dragged = false;
       let dragStartX = 0;
       let dragStartY = 0;
       let rotX = 0.3;
       let rotY = -0.4;
       let distance = 2.5;
 
-      const onMouseDown = (e: MouseEvent) => {
-        isDragging = true;
+      let lastRenderMode = -1;
+      let lastSelectedItemId: string | null = null;
+      let sceneGpuDirty = true;
+      let pickInProgress = false;
+
+      async function pickAt(clientX: number, clientY: number) {
+        if (pickInProgress) return;
+        pickInProgress = true;
+
+        try {
+          const rect = canvas!.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return;
+
+          const u = (clientX - rect.left) / rect.width;
+          const v = 1 - (clientY - rect.top) / rect.height;
+
+          pickPassUniform.write(1);
+
+          const pickX = Math.min(
+            canvas!.width - 1,
+            Math.max(0, Math.floor(u * canvas!.width)),
+          );
+          const pickY = Math.min(
+            canvas!.height - 1,
+            Math.max(0, Math.floor((1 - v) * canvas!.height)),
+          );
+
+          const encoder = root.device.createCommandEncoder();
+          pipeline
+            .with(encoder)
+            .withColorAttachment({ view: pickTextureView })
+            .draw(3);
+          encoder.copyTextureToBuffer(
+            { texture: pickTexture, origin: { x: pickX, y: pickY, z: 0 } },
+            { buffer: pickReadbackBuffer, bytesPerRow: PICK_READBACK_BYTES_PER_ROW },
+            { width: 1, height: 1 },
+          );
+          root.device.queue.submit([encoder.finish()]);
+          await root.device.queue.onSubmittedWorkDone();
+
+          await pickReadbackBuffer.mapAsync(GPUMapMode.READ);
+          const pickId = readPickIdFromBytes(
+            new Uint8Array(pickReadbackBuffer.getMappedRange()),
+          );
+          pickReadbackBuffer.unmap();
+
+          const { root: sceneRoot, selectItem, selectRoot } =
+            useSceneStore.getState();
+
+          if (pickId === 0) {
+            selectRoot();
+            return;
+          }
+
+          const itemId = pickItemIds[pickId - 1];
+          if (!itemId) return;
+
+          const found = findItem(sceneRoot, itemId);
+          if (!found) return;
+
+          const containerId =
+            found.item.kind === "group" ? found.item.id : found.container.id;
+          selectItem(containerId, itemId);
+        } finally {
+          pickPassUniform.write(0);
+          pickInProgress = false;
+        }
+      }
+
+      const onPointerDown = (e: PointerEvent) => {
+        if (e.button !== 0) return;
+        pointerDown = true;
+        dragged = false;
         dragStartX = e.clientX;
         dragStartY = e.clientY;
       };
 
-      const onMouseMove = (e: MouseEvent) => {
-        if (!isDragging) return;
-        const dx = ((e.clientX - dragStartX) / window.innerWidth) * Math.PI * 2;
-        const dy =
+      const onPointerMove = (e: PointerEvent) => {
+        if (!pointerDown) return;
+        const dx = e.clientX - dragStartX;
+        const dy = e.clientY - dragStartY;
+        if (!dragged && Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
+          dragged = true;
+        }
+        if (!dragged) return;
+        const totalDx =
+          ((e.clientX - dragStartX) / window.innerWidth) * Math.PI * 2;
+        const totalDy =
           ((e.clientY - dragStartY) / window.innerHeight) * Math.PI * 2;
-        mouseUniform.write(d.vec2f(rotX + dx, rotY + dy));
+        mouseUniform.write(d.vec2f(rotX + totalDx, rotY + totalDy));
       };
 
-      const onMouseUp = (e: MouseEvent) => {
-        if (!isDragging) return;
-        isDragging = false;
-        rotX += ((e.clientX - dragStartX) / window.innerWidth) * Math.PI * 2;
-        rotY += ((e.clientY - dragStartY) / window.innerHeight) * Math.PI * 2;
+      const onPointerUp = (e: PointerEvent) => {
+        if (!pointerDown || e.button !== 0) return;
+        pointerDown = false;
+
+        if (dragged) {
+          rotX += ((e.clientX - dragStartX) / window.innerWidth) * Math.PI * 2;
+          rotY += ((e.clientY - dragStartY) / window.innerHeight) * Math.PI * 2;
+          mouseUniform.write(d.vec2f(rotX, rotY));
+        } else {
+          void pickAt(e.clientX, e.clientY);
+        }
       };
 
       const onWheel = (e: WheelEvent) => {
@@ -287,17 +454,18 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         distanceUniform.write(distance);
       };
 
-      canvas.addEventListener("mousedown", onMouseDown);
-      window.addEventListener("mousemove", onMouseMove);
-      window.addEventListener("mouseup", onMouseUp);
+      canvas.addEventListener("pointerdown", onPointerDown);
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
       canvas.addEventListener("wheel", onWheel, { passive: false });
 
       function updateSize() {
         const dpr = Math.min(window.devicePixelRatio ?? 1, 1.0);
         canvas!.width = canvas!.clientWidth * dpr;
         canvas!.height = canvas!.clientHeight * dpr;
-        if (canvas!.height > 0) {
+        if (canvas!.width > 0 && canvas!.height > 0) {
           aspectUniform.write(canvas!.width / canvas!.height);
+          resizePickTarget(canvas!.width, canvas!.height);
         }
       }
 
@@ -310,11 +478,43 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       const TARGET_MS = 1000 / 60;
       let lastFrameTime = 0;
       let lastRoot: SceneRoot | null = null;
-      let lastRenderMode = -1;
-      let lastSelectedItemId: string | null = null;
-      let sceneGpuDirty = true;
+
+      function uploadSceneGpu(sceneRoot: SceneRoot, selectedItemId: string | null, renderMode: number) {
+        const { instructions, objectInfos, objectCount } = buildGpuData(sceneRoot);
+        instructionsBuffer.write(instructions);
+        objectInfoBuffer.write(objectInfos);
+        objectCountUniform.write(objectCount);
+        renderModeUniform.write(renderMode);
+
+        const selection = buildSelectionGpuData(sceneRoot, selectedItemId);
+        selectionInstructionsBuffer.write(selection.instructions);
+        selectionCountUniform.write(selection.count);
+        selectionEnabledUniform.write(selection.enabled ? 1 : 0);
+        selectionUsesSceneSdfUniform.write(selection.usesSceneSdf ? 1 : 0);
+
+        const pick = buildPickGpuData(sceneRoot);
+        pickInstructionsBuffer.write(pick.instructions);
+        pickObjectInfoBuffer.write(pick.objectInfos);
+        pickObjectCountUniform.write(pick.objectCount);
+        pickItemIds = pick.itemIds;
+      }
+
+      const initialState = useSceneStore.getState();
+      uploadSceneGpu(
+        initialState.root,
+        initialState.selectedItemId,
+        useRenderStore.getState().renderMode,
+      );
+      lastRoot = initialState.root;
+      lastRenderMode = useRenderStore.getState().renderMode;
+      lastSelectedItemId = initialState.selectedItemId;
 
       function frame(now: number) {
+        if (pickInProgress) {
+          animFrameId = requestAnimationFrame(frame);
+          return;
+        }
+
         if (now - lastFrameTime < TARGET_MS) {
           animFrameId = requestAnimationFrame(frame);
           return;
@@ -330,18 +530,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           renderMode !== lastRenderMode ||
           selectedItemId !== lastSelectedItemId
         ) {
-          const { instructions, objectInfos, objectCount } =
-            buildGpuData(sceneRoot);
-          instructionsBuffer.write(instructions);
-          objectInfoBuffer.write(objectInfos);
-          objectCountUniform.write(objectCount);
-          renderModeUniform.write(renderMode);
-
-          const selection = buildSelectionGpuData(sceneRoot, selectedItemId);
-          selectionInstructionsBuffer.write(selection.instructions);
-          selectionCountUniform.write(selection.count);
-          selectionEnabledUniform.write(selection.enabled ? 1 : 0);
-          selectionUsesSceneSdfUniform.write(selection.usesSceneSdf ? 1 : 0);
+          uploadSceneGpu(sceneRoot, selectedItemId, renderMode);
 
           lastRoot = sceneRoot;
           lastRenderMode = renderMode;
@@ -359,11 +548,13 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       registeredCleanup = () => {
         observer.disconnect();
         cancelAnimationFrame(animFrameId);
-        canvas.removeEventListener("mousedown", onMouseDown);
-        window.removeEventListener("mousemove", onMouseMove);
-        window.removeEventListener("mouseup", onMouseUp);
+        canvas.removeEventListener("pointerdown", onPointerDown);
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
         canvas.removeEventListener("wheel", onWheel);
         root.destroy();
+        pickTexture.destroy();
+        pickReadbackBuffer.destroy();
       };
     });
 
