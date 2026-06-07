@@ -25,6 +25,13 @@ export const GIZMO_DRAG_AXIS_SIGN: Record<GizmoAxis, number> = {
   y: 1,
   z: -1,
 };
+
+/** Ring rotation sign per axis (screen Y-down vs world Y-up; Z unlike X/Y). */
+export const GIZMO_ROTATE_AXIS_SIGN: Record<GizmoAxis, number> = {
+  x: -1,
+  y: -1,
+  z: 1,
+};
 export const GIZMO_ARROW_LENGTH_RATIO = 0.85;
 export const GIZMO_SHAFT_RADIUS_RATIO = 0.035;
 export const GIZMO_HEAD_RADIUS_RATIO = 0.08;
@@ -44,6 +51,7 @@ export const GIZMO_RENDER_SCALE_MULT = 1.35;
 export const GIZMO_CAMERA_PUSH = 0;
 
 const DEG_TO_RAD = Math.PI / 180;
+const RAD_TO_DEG = 180 / Math.PI;
 
 const AXIS_DIRS: Record<GizmoAxis, Vec3> = {
   x: [1, 0, 0],
@@ -65,6 +73,14 @@ function scaleVec(v: Vec3, s: number): Vec3 {
 
 function dot(a: Vec3, b: Vec3): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
 }
 
 function len(v: Vec3): number {
@@ -150,6 +166,11 @@ export const GIZMO_MODE_ROTATE = 1;
 
 export const GIZMO_RING_MAJOR_RATIO = 0.85;
 export const GIZMO_RING_TUBE_RATIO = 0.035;
+/**
+ * Edge-on rings project to a long screen line; screen pick falsely hits far
+ * outside the visible torus below this alignment with the view ray.
+ */
+const RING_SCREEN_PICK_FACE_ON_MIN = 0.35;
 
 export type GizmoWorldAxes = { x: Vec3; y: Vec3; z: Vec3 };
 export type GizmoPickMode = "translate" | "rotate";
@@ -188,6 +209,13 @@ export function getGizmoWorldAxes(
     y = applyEuler(y, ancestors[i].rotation);
     z = applyEuler(z, ancestors[i].rotation);
   }
+
+  const nx = len(x);
+  const ny = len(y);
+  const nz = len(z);
+  if (nx > 1e-8) x = scaleVec(x, 1 / nx);
+  if (ny > 1e-8) y = scaleVec(y, 1 / ny);
+  if (nz > 1e-8) z = scaleVec(z, 1 / nz);
 
   return { x, y, z };
 }
@@ -356,7 +384,7 @@ function worldAxisRingDistance(
   return Math.hypot(q2, along) - tubeR;
 }
 
-/** 3D SDF pick — same geometry + hit epsilon as shader evalRotateGizmo. */
+/** 3D SDF pick — prefers the ring most face-on to the camera when several overlap. */
 export function hitTestRotateGizmo(
   ray: CameraRay,
   gizmoPos: Vec3,
@@ -364,7 +392,7 @@ export function hitTestRotateGizmo(
   axes: GizmoWorldAxes,
 ): GizmoAxis | null {
   let bestAxis: GizmoAxis | null = null;
-  let bestDist = Infinity;
+  let bestScore = -Infinity;
   const hitEps = GIZMO_HIT_EPS;
   const axisVecs: Record<GizmoAxis, Vec3> = {
     x: axes.x,
@@ -379,12 +407,19 @@ export function hitTestRotateGizmo(
 
     for (const axis of ["x", "y", "z"] as const) {
       const d = worldAxisRingDistance(gp, axisVecs[axis], gizmoScale);
-      if (d < hitEps && d < bestDist) {
-        bestDist = d;
-        bestAxis = axis;
+      if (d < hitEps) {
+        const axisLen = len(axisVecs[axis]);
+        const faceOn =
+          axisLen > 1e-8
+            ? Math.abs(dot(scaleVec(axisVecs[axis], 1 / axisLen), ray.direction))
+            : 0;
+        const score = faceOn - t * 1e-4;
+        if (score > bestScore) {
+          bestScore = score;
+          bestAxis = axis;
+        }
       }
     }
-    if (bestAxis) break;
 
     let minD = Infinity;
     for (const axis of ["x", "y", "z"] as const) {
@@ -398,6 +433,17 @@ export function hitTestRotateGizmo(
   }
 
   return bestAxis;
+}
+
+/** 1 = ring plane faces camera; 0 = edge-on. */
+function ringAxisFaceOn(axis: Vec3, rayDir: Vec3): number {
+  const axisLen = len(axis);
+  if (axisLen < 1e-8) return 0;
+  return Math.abs(dot(scaleVec(axis, 1 / axisLen), rayDir));
+}
+
+function isRingScreenPickable(axis: Vec3, rayDir: Vec3): boolean {
+  return ringAxisFaceOn(axis, rayDir) >= RING_SCREEN_PICK_FACE_ON_MIN;
 }
 
 function ringPlaneBasis(axis: Vec3): [Vec3, Vec3] | null {
@@ -465,7 +511,7 @@ function ringScreenDistance(
   return best === Infinity ? null : best;
 }
 
-/** 3D pick first; screen-space ring polyline fallback. */
+/** Screen-space ring pick first (matches visible overlap); 3D fallback. */
 export function hitTestRotateGizmoScreen(
   clientX: number,
   clientY: number,
@@ -487,9 +533,6 @@ export function hitTestRotateGizmoScreen(
   );
   if (!ray) return null;
 
-  const pick3d = hitTestRotateGizmo(ray, gizmoPos, gizmoScale, axes);
-  if (pick3d) return pick3d;
-
   const axisVecs: Record<GizmoAxis, Vec3> = {
     x: axes.x,
     y: axes.y,
@@ -500,6 +543,9 @@ export function hitTestRotateGizmoScreen(
   let bestDist = Infinity;
 
   for (const axis of ["x", "y", "z"] as const) {
+    const axisDir = axisVecs[axis];
+    if (!isRingScreenPickable(axisDir, ray.direction)) continue;
+
     const d = ringScreenDistance(
       clientX,
       clientY,
@@ -509,14 +555,16 @@ export function hitTestRotateGizmoScreen(
       distance,
       gizmoPos,
       gizmoScale,
-      axisVecs[axis],
+      axisDir,
     );
     if (d === null || d >= GIZMO_PICK_PIXELS_RING || d >= bestDist) continue;
     bestDist = d;
     bestAxis = axis;
   }
 
-  return bestAxis;
+  if (bestAxis) return bestAxis;
+
+  return hitTestRotateGizmo(ray, gizmoPos, gizmoScale, axes);
 }
 
 /** Mode-aware 3D + screen pick. */
@@ -697,7 +745,11 @@ function ringScreenAxisPick(
   gizmoPos: Vec3,
   gizmoScale: number,
   axes: GizmoWorldAxes,
+  rayDir: Vec3,
 ): { dist: number } | null {
+  const axisDir = axes[axis];
+  if (!isRingScreenPickable(axisDir, rayDir)) return null;
+
   const dist = ringScreenDistance(
     clientX,
     clientY,
@@ -707,10 +759,112 @@ function ringScreenAxisPick(
     distance,
     gizmoPos,
     gizmoScale,
-    axes[axis],
+    axisDir,
   );
   if (dist === null) return null;
   return { dist };
+}
+
+/** True when the pointer is within pick tolerance of a specific gizmo axis. */
+export function isGizmoAxisNearScreen(
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  gizmoPos: Vec3,
+  gizmoScale: number,
+  axis: GizmoAxis,
+  mode: GizmoPickMode,
+  axes: GizmoWorldAxes | null,
+): boolean {
+  if (mode === "rotate") {
+    if (!axes) return false;
+    const ray = computeCameraRayFromClient(
+      clientX,
+      clientY,
+      canvas,
+      rotX,
+      rotY,
+      distance,
+    );
+    if (!ray) return false;
+    const ring = ringScreenAxisPick(
+      clientX,
+      clientY,
+      axis,
+      canvas,
+      rotX,
+      rotY,
+      distance,
+      gizmoPos,
+      gizmoScale,
+      axes,
+      ray.direction,
+    );
+    return ring !== null && ring.dist <= GIZMO_HOVER_STICKY_PIXELS_RING;
+  }
+
+  const seg = axisScreenSegmentPick(
+    clientX,
+    clientY,
+    axis,
+    canvas,
+    rotX,
+    rotY,
+    distance,
+    gizmoPos,
+    gizmoScale,
+  );
+  if (!seg) return false;
+
+  const pickRadius = seg.onHead
+    ? GIZMO_HOVER_STICKY_PIXELS_HEAD
+    : GIZMO_HOVER_STICKY_PIXELS_SHAFT;
+  return seg.dist <= pickRadius;
+}
+
+/** CPU screen pick + hover-axis stabilization (shared by hover and click). */
+export function pickGizmoAxisScreen(
+  mode: GizmoPickMode,
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  gizmoPos: Vec3,
+  gizmoScale: number,
+  axes: GizmoWorldAxes | null,
+  previousAxis: GizmoAxis | null,
+): GizmoAxis | null {
+  const raw = hitTestGizmoScreen(
+    mode,
+    clientX,
+    clientY,
+    canvas,
+    rotX,
+    rotY,
+    distance,
+    gizmoPos,
+    gizmoScale,
+    axes,
+  );
+  return stabilizeGizmoHoverAxis(
+    clientX,
+    clientY,
+    canvas,
+    rotX,
+    rotY,
+    distance,
+    gizmoPos,
+    gizmoScale,
+    raw,
+    previousAxis,
+    mode,
+    axes,
+  );
 }
 
 /** Keep hover axis when GPU single-pixel pick flickers on thin gizmo geometry. */
@@ -733,6 +887,15 @@ export function stabilizeGizmoHoverAxis(
 
   if (mode === "rotate") {
     if (!axes) return null;
+    const ray = computeCameraRayFromClient(
+      clientX,
+      clientY,
+      canvas,
+      rotX,
+      rotY,
+      distance,
+    );
+    if (!ray) return null;
     const ring = ringScreenAxisPick(
       clientX,
       clientY,
@@ -744,6 +907,7 @@ export function stabilizeGizmoHoverAxis(
       gizmoPos,
       gizmoScale,
       axes,
+      ray.direction,
     );
     if (!ring) return null;
     return ring.dist <= GIZMO_HOVER_STICKY_PIXELS_RING ? previousAxis : null;
@@ -823,6 +987,363 @@ export function axisDeltaFromScreenDrag(
   return (
     screenDelta * state.worldPerScreenPx * GIZMO_DRAG_AXIS_SIGN[axis]
   );
+}
+
+type Mat3 = [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
+
+function mat3FromColumns(cx: Vec3, cy: Vec3, cz: Vec3): Mat3 {
+  return [cx[0], cx[1], cx[2], cy[0], cy[1], cy[2], cz[0], cz[1], cz[2]];
+}
+
+function mat3TransformVec3(m: Mat3, v: Vec3): Vec3 {
+  return [
+    m[0] * v[0] + m[3] * v[1] + m[6] * v[2],
+    m[1] * v[0] + m[4] * v[1] + m[7] * v[2],
+    m[2] * v[0] + m[5] * v[1] + m[8] * v[2],
+  ];
+}
+
+function mat3Mul(a: Mat3, b: Mat3): Mat3 {
+  return mat3FromColumns(
+    mat3TransformVec3(a, [b[0], b[1], b[2]]),
+    mat3TransformVec3(a, [b[3], b[4], b[5]]),
+    mat3TransformVec3(a, [b[6], b[7], b[8]]),
+  );
+}
+
+function rotateVecAxisAngle(v: Vec3, axis: Vec3, angle: number): Vec3 {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const d = dot(axis, v);
+  return add(
+    add(scaleVec(v, c), scaleVec(cross(axis, v), s)),
+    scaleVec(axis, d * (1 - c)),
+  );
+}
+
+function mat3FromAxisAngle(axis: Vec3, angle: number): Mat3 {
+  return mat3FromColumns(
+    rotateVecAxisAngle([1, 0, 0], axis, angle),
+    rotateVecAxisAngle([0, 1, 0], axis, angle),
+    rotateVecAxisAngle([0, 0, 1], axis, angle),
+  );
+}
+
+/** Euler XYZ degrees → mat3 matching rotXYZ / shader applyInvRotXYZ inverse. */
+function eulerDegreesToMat3(rotDeg: [number, number, number]): Mat3 {
+  const rot: Vec3 = [
+    rotDeg[0] * DEG_TO_RAD,
+    rotDeg[1] * DEG_TO_RAD,
+    rotDeg[2] * DEG_TO_RAD,
+  ];
+  return mat3FromColumns(
+    rotXYZ([1, 0, 0], rot),
+    rotXYZ([0, 1, 0], rot),
+    rotXYZ([0, 0, 1], rot),
+  );
+}
+
+/** mat3 → Euler XYZ degrees (R = Rz * Ry * Rx, column-major). */
+function mat3ToEulerDegrees(m: Mat3): [number, number, number] {
+  const sy = Math.max(-1, Math.min(1, -m[2]));
+  const ry = Math.asin(sy);
+  const cy = Math.cos(ry);
+
+  let rx: number;
+  let rz: number;
+
+  if (Math.abs(cy) > 1e-6) {
+    rx = Math.atan2(m[5] / cy, m[8] / cy);
+    rz = Math.atan2(m[1] / cy, m[0] / cy);
+  } else {
+    rx = Math.atan2(-m[3], m[4]);
+    rz = 0;
+  }
+
+  return [rx * RAD_TO_DEG, ry * RAD_TO_DEG, rz * RAD_TO_DEG];
+}
+
+function mat3Drift(a: Mat3, b: Mat3): number {
+  return a.reduce((sum, v, i) => sum + Math.abs(v - b[i]), 0);
+}
+
+function eulerNearPrev(
+  rot: [number, number, number],
+  prev: [number, number, number],
+): [number, number, number] {
+  const out: [number, number, number] = [...rot];
+  for (let i = 0; i < 3; i++) {
+    while (out[i] - prev[i] > 180) out[i] -= 360;
+    while (out[i] - prev[i] < -180) out[i] += 360;
+  }
+  return out;
+}
+
+function eulerDeltaSq(
+  a: [number, number, number],
+  b: [number, number, number],
+): number {
+  return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+}
+
+function mat3ToEulerBranch(m: Mat3, ryRad: number): [number, number, number] {
+  const cy = Math.cos(ryRad);
+  let rx: number;
+  let rz: number;
+
+  if (Math.abs(cy) > 1e-6) {
+    rx = Math.atan2(m[5] / cy, m[8] / cy);
+    rz = Math.atan2(m[1] / cy, m[0] / cy);
+  } else {
+    rx = Math.atan2(-m[3], m[4]);
+    rz = 0;
+  }
+
+  return [rx * RAD_TO_DEG, ryRad * RAD_TO_DEG, rz * RAD_TO_DEG];
+}
+
+/** Euler XYZ matching m, continuous with prev, stable through gimbal. */
+function mat3ToEulerDegreesHinted(
+  m: Mat3,
+  prev: [number, number, number],
+): [number, number, number] {
+  const sy = Math.max(-1, Math.min(1, -m[2]));
+  const ryA = Math.asin(sy);
+  const ryB = Math.PI - ryA;
+
+  const roots: [number, number, number][] = [
+    mat3ToEulerBranch(m, ryA),
+    mat3ToEulerBranch(m, ryB),
+  ];
+
+  const candidates: [number, number, number][] = [];
+  for (const root of roots) {
+    for (let kx = -2; kx <= 2; kx++) {
+      for (let ky = -1; ky <= 1; ky++) {
+        for (let kz = -2; kz <= 2; kz++) {
+          candidates.push(
+            eulerNearPrev(
+              [root[0] + kx * 360, root[1] + ky * 360, root[2] + kz * 360],
+              prev,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  if (Math.abs(m[2]) >= 0.99999) {
+    const ry = Math.sign(-m[2]) * 90;
+    const sumDeg = Math.atan2(m[1], m[0]) * RAD_TO_DEG;
+    const poleRx = Math.atan2(-m[3], m[4]) * RAD_TO_DEG;
+    candidates.push(
+      eulerNearPrev([poleRx, ry, prev[2]], prev),
+      eulerNearPrev([prev[0], ry, sumDeg - prev[0]], prev),
+      eulerNearPrev([sumDeg - prev[2], ry, prev[2]], prev),
+      eulerNearPrev([poleRx + 180, ry, prev[2] + 180], prev),
+    );
+  }
+
+  let best = eulerNearPrev(mat3ToEulerDegrees(m), prev);
+  let bestDrift = mat3Drift(m, eulerDegreesToMat3(best));
+  let bestScore = eulerDeltaSq(best, prev);
+
+  for (const c of candidates) {
+    const drift = mat3Drift(m, eulerDegreesToMat3(c));
+    const score = eulerDeltaSq(c, prev);
+    if (
+      drift < bestDrift - 1e-6 ||
+      (Math.abs(drift - bestDrift) < 1e-6 && score < bestScore)
+    ) {
+      best = c;
+      bestDrift = drift;
+      bestScore = score;
+    }
+  }
+
+  return best;
+}
+
+const LOCAL_GIZMO_AXIS: Record<GizmoAxis, Vec3> = {
+  x: [1, 0, 0],
+  y: [0, 1, 0],
+  z: [0, 0, 1],
+};
+
+function rayPlaneIntersect(
+  origin: Vec3,
+  direction: Vec3,
+  planePoint: Vec3,
+  planeNormal: Vec3,
+): Vec3 | null {
+  const denom = dot(direction, planeNormal);
+  if (Math.abs(denom) < 1e-6) return null;
+  const t = dot(sub(planePoint, origin), planeNormal) / denom;
+  return add(origin, scaleVec(direction, t));
+}
+
+function vectorOnRingPlane(
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  pivot: Vec3,
+  axis: Vec3,
+): Vec3 | null {
+  const ray = computeCameraRayFromClient(
+    clientX,
+    clientY,
+    canvas,
+    rotX,
+    rotY,
+    distance,
+  );
+  if (!ray) return null;
+
+  const hit = rayPlaneIntersect(ray.origin, ray.direction, pivot, axis);
+  if (!hit) return null;
+
+  const v = sub(hit, pivot);
+  const onPlane = sub(v, scaleVec(axis, dot(v, axis)));
+  const dist = len(onPlane);
+  if (dist < 1e-6) return null;
+  return scaleVec(onPlane, 1 / dist);
+}
+
+/** Signed angle from startDir to dir around axis (radians, (-π, π]). */
+function signedRingAngle(startDir: Vec3, dir: Vec3, axis: Vec3): number {
+  return Math.atan2(dot(cross(startDir, dir), axis), dot(startDir, dir));
+}
+
+/** Keep total drag angle continuous past ±180° (Blender-style unwrap). */
+function unwrapRingAngle(angle: number, prev: number): number {
+  let out = angle;
+  while (out - prev > Math.PI) out -= 2 * Math.PI;
+  while (out - prev < -Math.PI) out += 2 * Math.PI;
+  return out;
+}
+
+export type RingDragState = {
+  pivotWorld: Vec3;
+  worldAxis: Vec3;
+  startDir: Vec3;
+  totalAngleRad: number;
+  R_itemStart: Mat3;
+  startEuler: [number, number, number];
+  lastEuler: [number, number, number];
+  dragAxis: GizmoAxis;
+};
+
+/** Capture ring-plane basis at pointer down (fixed for whole drag). */
+export function beginRingDrag(
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  pivotWorld: Vec3,
+  worldAxis: Vec3,
+  dragAxis: GizmoAxis,
+  itemRotation: [number, number, number],
+): RingDragState | null {
+  const axisLen = len(worldAxis);
+  if (axisLen < 1e-8) return null;
+  const axis = scaleVec(worldAxis, 1 / axisLen);
+
+  const startDir = vectorOnRingPlane(
+    clientX,
+    clientY,
+    canvas,
+    rotX,
+    rotY,
+    distance,
+    pivotWorld,
+    axis,
+  );
+  if (!startDir) return null;
+
+  return {
+    pivotWorld,
+    worldAxis: axis,
+    startDir,
+    totalAngleRad: 0,
+    R_itemStart: eulerDegreesToMat3(itemRotation),
+    startEuler: [...itemRotation],
+    lastEuler: [...itemRotation],
+    dragAxis,
+  };
+}
+
+/**
+ * Total ring angle from drag start to current pointer (Blender-style).
+ * Returns null when the ring plane is edge-on to the cursor ray.
+ */
+export function ringTotalAngleFromScreenDrag(
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  state: RingDragState,
+): number | null {
+  const dir = vectorOnRingPlane(
+    clientX,
+    clientY,
+    canvas,
+    rotX,
+    rotY,
+    distance,
+    state.pivotWorld,
+    state.worldAxis,
+  );
+  if (!dir) return null;
+
+  const raw =
+    signedRingAngle(state.startDir, dir, state.worldAxis) *
+    GIZMO_ROTATE_AXIS_SIGN[state.dragAxis];
+  return unwrapRingAngle(raw, state.totalAngleRad);
+}
+
+export function applyWorldRotationToItem(
+  root: SceneRoot,
+  itemId: string,
+  totalAngleRad: number,
+  state: RingDragState,
+): void {
+  const found = findItem(root, itemId);
+  if (!found) return;
+
+  state.totalAngleRad = totalAngleRad;
+  const rNew = mat3Mul(
+    state.R_itemStart,
+    mat3FromAxisAngle(
+      LOCAL_GIZMO_AXIS[state.dragAxis],
+      totalAngleRad,
+    ),
+  );
+  const rotation = mat3ToEulerDegreesHinted(rNew, state.startEuler);
+  state.lastEuler = rotation;
+
+  const { updateLayer, updateGroup } = useSceneStore.getState();
+  if (found.item.kind === "layer") {
+    updateLayer(found.container.id, found.item.id, { rotation });
+  } else {
+    updateGroup(found.item.id, { rotation });
+  }
 }
 
 export function applyWorldDeltaToItem(

@@ -29,22 +29,26 @@ import { useGizmoStore } from "../store/gizmoStore";
 import { useRenderStore } from "../store/renderStore";
 import { clientToPickPixel, getCanvasAspect } from "./camera";
 import {
+  applyWorldRotationToItem,
   axisDeltaFromScreenDrag,
   beginAxisScreenDrag,
+  beginRingDrag,
   getGizmoWorldAxes,
+  ringTotalAngleFromScreenDrag,
   getGizmoWorldPosition,
   getItemAncestorGroups,
   GIZMO_MODE_ROTATE,
   GIZMO_MODE_TRANSLATE,
   GIZMO_ARROW_LENGTH_RATIO,
   gizmoVisualScaleForDistance,
-  hitTestGizmoScreen,
-  hitTestTranslateGizmoScreen,
+  isGizmoAxisNearScreen,
+  pickGizmoAxisScreen,
   stabilizeGizmoHoverAxis,
   type GizmoPickMode,
   worldToItemLocalPosition,
   type AxisScreenDragState,
   type GizmoAxis,
+  type RingDragState,
 } from "./gizmo";
 
 type GizmoGpuPickResult = {
@@ -429,6 +433,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       let gizmoDragAxis: GizmoAxis | null = null;
       let gizmoDragStartWorld: [number, number, number] | null = null;
       let gizmoDragScreen: AxisScreenDragState | null = null;
+      let gizmoDragRing: RingDragState | null = null;
       let gizmoDragItemId: string | null = null;
       let gizmoDragAncestors: ObjectGroup[] | null = null;
       let cachedPickObjectCount = 0;
@@ -440,10 +445,6 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         y: number;
         seq: number;
       } | null = null;
-
-      function isTranslateGizmoMode(): boolean {
-        return useGizmoStore.getState().mode === "translate";
-      }
 
       function isGizmoVisibleMode(): boolean {
         const mode = useGizmoStore.getState().mode;
@@ -644,36 +645,34 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
             const [rx, ry] = getCameraRot();
             const gizmoScale = gizmoVisualScaleForDistance(distance);
 
-            let axis = result.axis;
-            if (!axis) {
-              axis = hitTestGizmoScreen(
-                mode,
-                pick.x,
-                pick.y,
-                canvas!,
-                rx,
-                ry,
-                distance,
-                pivotWorld,
-                gizmoScale,
-                axes,
-              );
-            }
-
-            const stabilized = stabilizeGizmoHoverAxis(
-              pick.x,
-              pick.y,
-              canvas!,
-              rx,
-              ry,
-              distance,
-              pivotWorld,
-              gizmoScale,
-              axis,
-              gizmoHoverAxis,
-              mode,
-              axes,
-            );
+            const stabilized = result.axis
+              ? stabilizeGizmoHoverAxis(
+                  pick.x,
+                  pick.y,
+                  canvas!,
+                  rx,
+                  ry,
+                  distance,
+                  pivotWorld,
+                  gizmoScale,
+                  result.axis,
+                  gizmoHoverAxis,
+                  mode,
+                  axes,
+                )
+              : pickGizmoAxisScreen(
+                  mode,
+                  pick.x,
+                  pick.y,
+                  canvas!,
+                  rx,
+                  ry,
+                  distance,
+                  pivotWorld,
+                  gizmoScale,
+                  axes,
+                  gizmoHoverAxis,
+                );
             gizmoHoverAxis = stabilized;
             canvas!.style.cursor = axisIdToCursor(stabilized);
           }
@@ -687,33 +686,109 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         clientX: number,
         clientY: number,
       ): Promise<boolean> {
-        if (!isTranslateGizmoMode()) return false;
+        if (!isGizmoVisibleMode()) return false;
 
         const { root: sceneRoot, selectedItemId } = useSceneStore.getState();
         if (!selectedItemId) return false;
 
+        const found = findItem(sceneRoot, selectedItemId);
+        if (!found) return false;
+
         const pivotWorld = getGizmoWorldPosition(sceneRoot, selectedItemId);
         const ancestors = getItemAncestorGroups(sceneRoot, selectedItemId);
-        if (!pivotWorld || !ancestors) return false;
+        if (!pivotWorld || ancestors === null) return false;
 
+        const mode = gizmoPickMode();
+        const axes =
+          mode === "rotate"
+            ? getGizmoWorldAxes(sceneRoot, selectedItemId)
+            : null;
         const [rx, ry] = getCameraRot();
-        const cpuAxis = hitTestTranslateGizmoScreen(
-          clientX,
-          clientY,
-          canvas!,
-          rx,
-          ry,
-          distance,
-          pivotWorld,
-          gizmoVisualScaleForDistance(distance),
-        );
-        const gpuPick = await pickGizmoAxisGpu(clientX, clientY);
-        const gpuAxis = gpuPick.axis;
-        const axis = gpuAxis ?? cpuAxis;
+        const gizmoScale = gizmoVisualScaleForDistance(distance);
+
+        let axis: GizmoAxis | null = null;
+
+        if (
+          gizmoHoverAxis &&
+          isGizmoAxisNearScreen(
+            clientX,
+            clientY,
+            canvas!,
+            rx,
+            ry,
+            distance,
+            pivotWorld,
+            gizmoScale,
+            gizmoHoverAxis,
+            mode,
+            axes,
+          )
+        ) {
+          axis = gizmoHoverAxis;
+        } else {
+          const gpuPick = await pickGizmoAxisGpu(clientX, clientY);
+          axis = gpuPick.axis
+            ? stabilizeGizmoHoverAxis(
+                clientX,
+                clientY,
+                canvas!,
+                rx,
+                ry,
+                distance,
+                pivotWorld,
+                gizmoScale,
+                gpuPick.axis,
+                gizmoHoverAxis,
+                mode,
+                axes,
+              )
+            : pickGizmoAxisScreen(
+                mode,
+                clientX,
+                clientY,
+                canvas!,
+                rx,
+                ry,
+                distance,
+                pivotWorld,
+                gizmoScale,
+                axes,
+                gizmoHoverAxis,
+              );
+        }
         if (!axis) return false;
 
+        if (mode === "rotate") {
+          if (!axes) return false;
+          const worldAxis = axes[axis];
+          const ringDrag = beginRingDrag(
+            clientX,
+            clientY,
+            canvas!,
+            rx,
+            ry,
+            distance,
+            pivotWorld,
+            worldAxis,
+            axis,
+            found.item.rotation,
+          );
+          if (!ringDrag) return false;
+
+          gizmoDragging = true;
+          gizmoDragAxis = axis;
+          gizmoDragItemId = selectedItemId;
+          gizmoDragAncestors = ancestors;
+          gizmoDragStartWorld = pivotWorld;
+          gizmoDragScreen = null;
+          gizmoDragRing = ringDrag;
+          gizmoHoverAxis = axis;
+          temporalStore.getState().pause();
+          canvas!.style.cursor = "grabbing";
+          return true;
+        }
+
         const axisDir = GIZMO_AXIS_DIR[axis];
-        const gizmoScale = gizmoVisualScaleForDistance(distance);
         const dragScreen = beginAxisScreenDrag(
           clientX,
           clientY,
@@ -733,6 +808,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         gizmoDragAncestors = ancestors;
         gizmoDragStartWorld = pivotWorld;
         gizmoDragScreen = dragScreen;
+        gizmoDragRing = null;
         gizmoHoverAxis = axis;
         temporalStore.getState().pause();
         canvas!.style.cursor = axisIdToCursor(axis);
@@ -740,12 +816,36 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       }
 
       function updateGizmoDrag(clientX: number, clientY: number) {
+        if (!gizmoDragging || !gizmoDragAxis || !gizmoDragItemId) {
+          return;
+        }
+
+        const [rx, ry] = getCameraRot();
+
+        if (gizmoDragRing) {
+          const totalAngle = ringTotalAngleFromScreenDrag(
+            clientX,
+            clientY,
+            canvas!,
+            rx,
+            ry,
+            distance,
+            gizmoDragRing,
+          );
+          if (totalAngle !== null) {
+            applyWorldRotationToItem(
+              useSceneStore.getState().root,
+              gizmoDragItemId,
+              totalAngle,
+              gizmoDragRing,
+            );
+          }
+          return;
+        }
+
         if (
-          !gizmoDragging ||
-          !gizmoDragAxis ||
           !gizmoDragStartWorld ||
           !gizmoDragScreen ||
-          !gizmoDragItemId ||
           !gizmoDragAncestors
         ) {
           return;
@@ -778,6 +878,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         gizmoDragAxis = null;
         gizmoDragStartWorld = null;
         gizmoDragScreen = null;
+        gizmoDragRing = null;
         gizmoDragItemId = null;
         gizmoDragAncestors = null;
         temporalStore.getState().resume();
