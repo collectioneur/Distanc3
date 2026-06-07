@@ -38,8 +38,10 @@ import {
   GIZMO_MODE_TRANSLATE,
   GIZMO_ARROW_LENGTH_RATIO,
   gizmoVisualScaleForDistance,
+  hitTestGizmoScreen,
   hitTestTranslateGizmoScreen,
   stabilizeGizmoHoverAxis,
+  type GizmoPickMode,
   worldToItemLocalPosition,
   type AxisScreenDragState,
   type GizmoAxis,
@@ -454,6 +456,10 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           : GIZMO_MODE_TRANSLATE;
       }
 
+      function gizmoPickMode(): GizmoPickMode {
+        return useGizmoStore.getState().mode;
+      }
+
       function writeGizmoDisabled() {
         gizmoUniforms.write({
           enabled: 0,
@@ -539,7 +545,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         clientY: number,
       ): Promise<GizmoGpuPickResult> {
         if (pickInProgress) return { axis: null, skipped: true };
-        if (!isTranslateGizmoMode()) return { axis: null, skipped: false };
+        if (!isGizmoVisibleMode()) return { axis: null, skipped: false };
 
         const { root: sceneRoot, selectedItemId } = useSceneStore.getState();
         if (!selectedItemId) return { axis: null, skipped: false };
@@ -630,8 +636,30 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
               continue;
             }
 
+            const mode = gizmoPickMode();
+            const axes =
+              mode === "rotate"
+                ? getGizmoWorldAxes(sceneRoot, selectedItemId)
+                : null;
             const [rx, ry] = getCameraRot();
             const gizmoScale = gizmoVisualScaleForDistance(distance);
+
+            let axis = result.axis;
+            if (!axis) {
+              axis = hitTestGizmoScreen(
+                mode,
+                pick.x,
+                pick.y,
+                canvas!,
+                rx,
+                ry,
+                distance,
+                pivotWorld,
+                gizmoScale,
+                axes,
+              );
+            }
+
             const stabilized = stabilizeGizmoHoverAxis(
               pick.x,
               pick.y,
@@ -641,8 +669,10 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
               distance,
               pivotWorld,
               gizmoScale,
-              result.axis,
+              axis,
               gizmoHoverAxis,
+              mode,
+              axes,
             );
             gizmoHoverAxis = stabilized;
             canvas!.style.cursor = axisIdToCursor(stabilized);
@@ -754,7 +784,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       }
 
       function updateGizmoHover(clientX: number, clientY: number) {
-        if (!isTranslateGizmoMode()) {
+        if (!isGizmoVisibleMode()) {
           hoverGpuSeq += 1;
           pendingHoverPick = null;
           gizmoHoverAxis = null;

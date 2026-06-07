@@ -34,9 +34,11 @@ export const GIZMO_HIT_EPS = 0.00015;
 /** Screen-space fallback tolerance in CSS pixels (3D pick is primary). */
 export const GIZMO_PICK_PIXELS_SHAFT = 10;
 export const GIZMO_PICK_PIXELS_HEAD = 14;
+export const GIZMO_PICK_PIXELS_RING = 12;
 /** Wider tolerance to keep hover cursor stable between GPU single-pixel hits. */
 export const GIZMO_HOVER_STICKY_PIXELS_SHAFT = 14;
 export const GIZMO_HOVER_STICKY_PIXELS_HEAD = 18;
+export const GIZMO_HOVER_STICKY_PIXELS_RING = 16;
 /** Visual-only: larger arrows; drawn on top of scene (no camera offset). */
 export const GIZMO_RENDER_SCALE_MULT = 1.35;
 export const GIZMO_CAMERA_PUSH = 0;
@@ -149,11 +151,16 @@ export const GIZMO_MODE_ROTATE = 1;
 export const GIZMO_RING_MAJOR_RATIO = 0.85;
 export const GIZMO_RING_TUBE_RATIO = 0.035;
 
+export type GizmoWorldAxes = { x: Vec3; y: Vec3; z: Vec3 };
+export type GizmoPickMode = "translate" | "rotate";
+
+const RING_SCREEN_SEGMENTS = 32;
+
 /** World-space X/Y/Z basis of the selected item (ancestor + own Euler XYZ). */
 export function getGizmoWorldAxes(
   root: SceneRoot,
   itemId: string,
-): { x: Vec3; y: Vec3; z: Vec3 } | null {
+): GizmoWorldAxes | null {
   const found = findItem(root, itemId);
   if (!found) return null;
 
@@ -336,6 +343,221 @@ export function hitTestTranslateGizmo(
   return bestAxis;
 }
 
+function worldAxisRingDistance(
+  gp: Vec3,
+  axis: Vec3,
+  gizmoScale: number,
+): number {
+  const majorR = gizmoScale * GIZMO_RING_MAJOR_RATIO;
+  const tubeR = gizmoScale * GIZMO_RING_TUBE_RATIO;
+  const along = dot(gp, axis);
+  const perp = sub(gp, scaleVec(axis, along));
+  const q2 = len(perp) - majorR;
+  return Math.hypot(q2, along) - tubeR;
+}
+
+/** 3D SDF pick — same geometry + hit epsilon as shader evalRotateGizmo. */
+export function hitTestRotateGizmo(
+  ray: CameraRay,
+  gizmoPos: Vec3,
+  gizmoScale: number,
+  axes: GizmoWorldAxes,
+): GizmoAxis | null {
+  let bestAxis: GizmoAxis | null = null;
+  let bestDist = Infinity;
+  const hitEps = GIZMO_HIT_EPS;
+  const axisVecs: Record<GizmoAxis, Vec3> = {
+    x: axes.x,
+    y: axes.y,
+    z: axes.z,
+  };
+
+  let t = 0;
+  for (let i = 0; i < 64; i++) {
+    const p = add(ray.origin, scaleVec(ray.direction, t));
+    const gp = sub(p, gizmoPos);
+
+    for (const axis of ["x", "y", "z"] as const) {
+      const d = worldAxisRingDistance(gp, axisVecs[axis], gizmoScale);
+      if (d < hitEps && d < bestDist) {
+        bestDist = d;
+        bestAxis = axis;
+      }
+    }
+    if (bestAxis) break;
+
+    let minD = Infinity;
+    for (const axis of ["x", "y", "z"] as const) {
+      minD = Math.min(
+        minD,
+        worldAxisRingDistance(gp, axisVecs[axis], gizmoScale),
+      );
+    }
+    t += Math.max(minD * 0.85, 0.0005);
+    if (t > 100) break;
+  }
+
+  return bestAxis;
+}
+
+function ringPlaneBasis(axis: Vec3): [Vec3, Vec3] | null {
+  const hint: Vec3 = Math.abs(axis[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const uRaw = [
+    hint[1] * axis[2] - hint[2] * axis[1],
+    hint[2] * axis[0] - hint[0] * axis[2],
+    hint[0] * axis[1] - hint[1] * axis[0],
+  ] as Vec3;
+  const uLen = len(uRaw);
+  if (uLen < 1e-8) return null;
+  const u = scaleVec(uRaw, 1 / uLen);
+  const v: Vec3 = [
+    axis[1] * u[2] - axis[2] * u[1],
+    axis[2] * u[0] - axis[0] * u[2],
+    axis[0] * u[1] - axis[1] * u[0],
+  ];
+  return [u, v];
+}
+
+function ringScreenDistance(
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  gizmoPos: Vec3,
+  gizmoScale: number,
+  axis: Vec3,
+): number | null {
+  const basis = ringPlaneBasis(axis);
+  if (!basis) return null;
+
+  const [u, v] = basis;
+  const majorR = gizmoScale * GIZMO_RING_MAJOR_RATIO;
+  let best = Infinity;
+
+  for (let i = 0; i < RING_SCREEN_SEGMENTS; i++) {
+    const a0 = (2 * Math.PI * i) / RING_SCREEN_SEGMENTS;
+    const a1 = (2 * Math.PI * (i + 1)) / RING_SCREEN_SEGMENTS;
+    const p0 = add(
+      gizmoPos,
+      add(scaleVec(u, majorR * Math.cos(a0)), scaleVec(v, majorR * Math.sin(a0))),
+    );
+    const p1 = add(
+      gizmoPos,
+      add(scaleVec(u, majorR * Math.cos(a1)), scaleVec(v, majorR * Math.sin(a1))),
+    );
+    const s0 = worldToClient(p0, canvas, rotX, rotY, distance);
+    const s1 = worldToClient(p1, canvas, rotX, rotY, distance);
+    if (!s0 || !s1) continue;
+
+    const d = distPointToSeg2d(
+      clientX,
+      clientY,
+      s0.x,
+      s0.y,
+      s1.x,
+      s1.y,
+    );
+    if (d < best) best = d;
+  }
+
+  return best === Infinity ? null : best;
+}
+
+/** 3D pick first; screen-space ring polyline fallback. */
+export function hitTestRotateGizmoScreen(
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  gizmoPos: Vec3,
+  gizmoScale: number,
+  axes: GizmoWorldAxes,
+): GizmoAxis | null {
+  const ray = computeCameraRayFromClient(
+    clientX,
+    clientY,
+    canvas,
+    rotX,
+    rotY,
+    distance,
+  );
+  if (!ray) return null;
+
+  const pick3d = hitTestRotateGizmo(ray, gizmoPos, gizmoScale, axes);
+  if (pick3d) return pick3d;
+
+  const axisVecs: Record<GizmoAxis, Vec3> = {
+    x: axes.x,
+    y: axes.y,
+    z: axes.z,
+  };
+
+  let bestAxis: GizmoAxis | null = null;
+  let bestDist = Infinity;
+
+  for (const axis of ["x", "y", "z"] as const) {
+    const d = ringScreenDistance(
+      clientX,
+      clientY,
+      canvas,
+      rotX,
+      rotY,
+      distance,
+      gizmoPos,
+      gizmoScale,
+      axisVecs[axis],
+    );
+    if (d === null || d >= GIZMO_PICK_PIXELS_RING || d >= bestDist) continue;
+    bestDist = d;
+    bestAxis = axis;
+  }
+
+  return bestAxis;
+}
+
+/** Mode-aware 3D + screen pick. */
+export function hitTestGizmoScreen(
+  mode: GizmoPickMode,
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  gizmoPos: Vec3,
+  gizmoScale: number,
+  axes: GizmoWorldAxes | null,
+): GizmoAxis | null {
+  if (mode === "rotate") {
+    if (!axes) return null;
+    return hitTestRotateGizmoScreen(
+      clientX,
+      clientY,
+      canvas,
+      rotX,
+      rotY,
+      distance,
+      gizmoPos,
+      gizmoScale,
+      axes,
+    );
+  }
+  return hitTestTranslateGizmoScreen(
+    clientX,
+    clientY,
+    canvas,
+    rotX,
+    rotY,
+    distance,
+    gizmoPos,
+    gizmoScale,
+  );
+}
+
 /** 3D pick first; screen-space fallback with degenerate-segment rejection. */
 export function hitTestTranslateGizmoScreen(
   clientX: number,
@@ -464,7 +686,34 @@ function axisScreenSegmentPick(
   return { dist, onHead: t >= headStart };
 }
 
-/** Keep hover axis when GPU single-pixel pick flickers along a thin shaft. */
+function ringScreenAxisPick(
+  clientX: number,
+  clientY: number,
+  axis: GizmoAxis,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  gizmoPos: Vec3,
+  gizmoScale: number,
+  axes: GizmoWorldAxes,
+): { dist: number } | null {
+  const dist = ringScreenDistance(
+    clientX,
+    clientY,
+    canvas,
+    rotX,
+    rotY,
+    distance,
+    gizmoPos,
+    gizmoScale,
+    axes[axis],
+  );
+  if (dist === null) return null;
+  return { dist };
+}
+
+/** Keep hover axis when GPU single-pixel pick flickers on thin gizmo geometry. */
 export function stabilizeGizmoHoverAxis(
   clientX: number,
   clientY: number,
@@ -476,9 +725,29 @@ export function stabilizeGizmoHoverAxis(
   gizmoScale: number,
   gpuAxis: GizmoAxis | null,
   previousAxis: GizmoAxis | null,
+  mode: GizmoPickMode,
+  axes: GizmoWorldAxes | null,
 ): GizmoAxis | null {
   if (gpuAxis) return gpuAxis;
   if (!previousAxis) return null;
+
+  if (mode === "rotate") {
+    if (!axes) return null;
+    const ring = ringScreenAxisPick(
+      clientX,
+      clientY,
+      previousAxis,
+      canvas,
+      rotX,
+      rotY,
+      distance,
+      gizmoPos,
+      gizmoScale,
+      axes,
+    );
+    if (!ring) return null;
+    return ring.dist <= GIZMO_HOVER_STICKY_PIXELS_RING ? previousAxis : null;
+  }
 
   const seg = axisScreenSegmentPick(
     clientX,
