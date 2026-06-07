@@ -143,6 +143,48 @@ export function getGizmoWorldPosition(root: SceneRoot, itemId: string): Vec3 | n
   return itemLocalToWorldPosition([...found.item.position], ancestors);
 }
 
+export const GIZMO_MODE_TRANSLATE = 0;
+export const GIZMO_MODE_ROTATE = 1;
+
+export const GIZMO_RING_MAJOR_RATIO = 0.85;
+export const GIZMO_RING_TUBE_RATIO = 0.035;
+
+/** World-space X/Y/Z basis of the selected item (ancestor + own Euler XYZ). */
+export function getGizmoWorldAxes(
+  root: SceneRoot,
+  itemId: string,
+): { x: Vec3; y: Vec3; z: Vec3 } | null {
+  const found = findItem(root, itemId);
+  if (!found) return null;
+
+  const ancestors = getAncestorGroups(root, found.container.id);
+  const applyEuler = (v: Vec3, rotDeg: [number, number, number]): Vec3 => {
+    const rot: Vec3 = [
+      rotDeg[0] * DEG_TO_RAD,
+      rotDeg[1] * DEG_TO_RAD,
+      rotDeg[2] * DEG_TO_RAD,
+    ];
+    return rotXYZ(v, rot);
+  };
+
+  let x: Vec3 = [1, 0, 0];
+  let y: Vec3 = [0, 1, 0];
+  let z: Vec3 = [0, 0, 1];
+
+  // Item rotation first, then ancestors inner → outer (matches shader: R_parent * … * R_item).
+  x = applyEuler(x, found.item.rotation);
+  y = applyEuler(y, found.item.rotation);
+  z = applyEuler(z, found.item.rotation);
+
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    x = applyEuler(x, ancestors[i].rotation);
+    y = applyEuler(y, ancestors[i].rotation);
+    z = applyEuler(z, ancestors[i].rotation);
+  }
+
+  return { x, y, z };
+}
+
 export function worldToItemLocalPosition(
   worldPos: Vec3,
   ancestors: ObjectGroup[],

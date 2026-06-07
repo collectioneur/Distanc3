@@ -25,13 +25,17 @@ import {
   type SceneRoot,
   type ShapeLayer,
 } from "../store/sceneStore";
+import { useGizmoStore } from "../store/gizmoStore";
 import { useRenderStore } from "../store/renderStore";
 import { clientToPickPixel, getCanvasAspect } from "./camera";
 import {
   axisDeltaFromScreenDrag,
   beginAxisScreenDrag,
+  getGizmoWorldAxes,
   getGizmoWorldPosition,
   getItemAncestorGroups,
+  GIZMO_MODE_ROTATE,
+  GIZMO_MODE_TRANSLATE,
   GIZMO_ARROW_LENGTH_RATIO,
   gizmoVisualScaleForDistance,
   hitTestTranslateGizmoScreen,
@@ -435,32 +439,62 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         seq: number;
       } | null = null;
 
+      function isTranslateGizmoMode(): boolean {
+        return useGizmoStore.getState().mode === "translate";
+      }
+
+      function isGizmoVisibleMode(): boolean {
+        const mode = useGizmoStore.getState().mode;
+        return mode === "translate" || mode === "rotate";
+      }
+
+      function gizmoModeUniform(): number {
+        return useGizmoStore.getState().mode === "rotate"
+          ? GIZMO_MODE_ROTATE
+          : GIZMO_MODE_TRANSLATE;
+      }
+
+      function writeGizmoDisabled() {
+        gizmoUniforms.write({
+          enabled: 0,
+          activeAxis: 0,
+          mode: 0,
+          _pad0: 0,
+          position: d.vec3f(0, 0, 0),
+          _pad: 0,
+          scale: 0,
+          axisX: d.vec3f(1, 0, 0),
+          _padX: 0,
+          axisY: d.vec3f(0, 1, 0),
+          _padY: 0,
+          axisZ: d.vec3f(0, 0, 1),
+          _padZ: 0,
+        });
+      }
+
+      function clearGizmoInteraction() {
+        if (gizmoDragging) endGizmoDrag();
+        gizmoHoverAxis = null;
+        hoverGpuSeq += 1;
+        pendingHoverPick = null;
+        canvas!.style.cursor = "default";
+      }
+
       function updateGizmoUniforms(
         sceneRoot: SceneRoot,
         selectedItemId: string | null,
         cameraDistance: number,
         activeAxis: GizmoAxis | null,
       ) {
-        if (!selectedItemId) {
-          gizmoUniforms.write({
-            enabled: 0,
-            activeAxis: 0,
-            position: d.vec3f(0, 0, 0),
-            _pad: 0,
-            scale: 0,
-          });
+        if (!isGizmoVisibleMode() || !selectedItemId) {
+          writeGizmoDisabled();
           return;
         }
 
         const pivotWorld = getGizmoWorldPosition(sceneRoot, selectedItemId);
-        if (!pivotWorld) {
-          gizmoUniforms.write({
-            enabled: 0,
-            activeAxis: 0,
-            position: d.vec3f(0, 0, 0),
-            _pad: 0,
-            scale: 0,
-          });
+        const axes = getGizmoWorldAxes(sceneRoot, selectedItemId);
+        if (!pivotWorld || !axes) {
+          writeGizmoDisabled();
           return;
         }
 
@@ -468,9 +502,17 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         gizmoUniforms.write({
           enabled: 1,
           activeAxis: activeAxis ? GIZMO_AXIS_ID[activeAxis] : 0,
+          mode: gizmoModeUniform(),
+          _pad0: 0,
           position: d.vec3f(pivotWorld[0], pivotWorld[1], pivotWorld[2]),
           _pad: 0,
           scale: visualScale,
+          axisX: d.vec3f(axes.x[0], axes.x[1], axes.x[2]),
+          _padX: 0,
+          axisY: d.vec3f(axes.y[0], axes.y[1], axes.y[2]),
+          _padY: 0,
+          axisZ: d.vec3f(axes.z[0], axes.z[1], axes.z[2]),
+          _padZ: 0,
         });
       }
 
@@ -497,6 +539,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         clientY: number,
       ): Promise<GizmoGpuPickResult> {
         if (pickInProgress) return { axis: null, skipped: true };
+        if (!isTranslateGizmoMode()) return { axis: null, skipped: false };
 
         const { root: sceneRoot, selectedItemId } = useSceneStore.getState();
         if (!selectedItemId) return { axis: null, skipped: false };
@@ -614,6 +657,8 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         clientX: number,
         clientY: number,
       ): Promise<boolean> {
+        if (!isTranslateGizmoMode()) return false;
+
         const { root: sceneRoot, selectedItemId } = useSceneStore.getState();
         if (!selectedItemId) return false;
 
@@ -709,6 +754,14 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       }
 
       function updateGizmoHover(clientX: number, clientY: number) {
+        if (!isTranslateGizmoMode()) {
+          hoverGpuSeq += 1;
+          pendingHoverPick = null;
+          gizmoHoverAxis = null;
+          canvas!.style.cursor = "default";
+          return;
+        }
+
         const { selectedItemId } = useSceneStore.getState();
         if (!selectedItemId) {
           hoverGpuSeq += 1;
@@ -856,6 +909,11 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         syncCameraUniform();
       };
 
+      const unsubGizmoMode = useGizmoStore.subscribe((state, prev) => {
+        if (state.mode === prev.mode) return;
+        clearGizmoInteraction();
+      });
+
       canvas.addEventListener("pointerdown", onPointerDown);
       window.addEventListener("pointermove", onPointerMove);
       window.addEventListener("pointerup", onPointerUp);
@@ -986,6 +1044,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       animFrameId = requestAnimationFrame(frame);
 
       registeredCleanup = () => {
+        unsubGizmoMode();
         observer.disconnect();
         cancelAnimationFrame(animFrameId);
         canvas.removeEventListener("pointerdown", onPointerDown);

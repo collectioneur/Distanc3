@@ -81,9 +81,17 @@ const SelectionUniforms = d.struct({
 const GizmoUniforms = d.struct({
   enabled: d.u32,
   activeAxis: d.u32,
+  mode: d.u32,
+  _pad0: d.u32,
   position: d.vec3f,
   _pad: d.f32,
   scale: d.f32,
+  axisX: d.vec3f,
+  _padX: d.f32,
+  axisY: d.vec3f,
+  _padY: d.f32,
+  axisZ: d.vec3f,
+  _padZ: d.f32,
 });
 
 const PickUniforms = d.struct({
@@ -143,9 +151,17 @@ export function createShader(root: TgpuRoot) {
   const gizmoUniforms = root.createUniform(GizmoUniforms, {
     enabled: 0,
     activeAxis: 0,
+    mode: 0,
+    _pad0: 0,
     position: d.vec3f(0.0, 0.0, 0.0),
     _pad: 0,
     scale: 0.3,
+    axisX: d.vec3f(1.0, 0.0, 0.0),
+    _padX: 0,
+    axisY: d.vec3f(0.0, 1.0, 0.0),
+    _padY: 0,
+    axisZ: d.vec3f(0.0, 0.0, 1.0),
+    _padZ: 0,
   });
 
   const instructionsBuffer = root.createReadonly(
@@ -1400,6 +1416,9 @@ export function createShader(root: TgpuRoot) {
   const GIZMO_SHAFT_R = 0.035;
   const GIZMO_HEAD_R = 0.08;
   const GIZMO_HEAD_LEN = 0.18;
+  const GIZMO_RING_MAJOR = 0.85;
+  const GIZMO_RING_TUBE = 0.035;
+  const GIZMO_MODE_ROTATE = 1;
 
   const sdCapsuleSeg = (p: d.v3f, a: d.v3f, b: d.v3f, r: number): number => {
     "use gpu";
@@ -1443,6 +1462,45 @@ export function createShader(root: TgpuRoot) {
     return d.vec2f(best, axis);
   };
 
+  const sdWorldAxisRing = (gp: d.v3f, axis: d.v3f, s: number): number => {
+    "use gpu";
+    const majorR = s * GIZMO_RING_MAJOR;
+    const tubeR = s * GIZMO_RING_TUBE;
+    const along = std.dot(gp, axis);
+    const perp = gp - axis * along;
+    const q = d.vec2f(std.length(perp) - majorR, along);
+    return std.length(q) - tubeR;
+  };
+
+  const evalRotateGizmo = (p: d.v3f): d.v2f => {
+    "use gpu";
+    const origin = gizmoUniforms.$.position;
+    const s = gizmoUniforms.$.scale;
+    const gp = p - origin;
+    const dx = sdWorldAxisRing(gp, gizmoUniforms.$.axisX, s);
+    const dy = sdWorldAxisRing(gp, gizmoUniforms.$.axisY, s);
+    const dz = sdWorldAxisRing(gp, gizmoUniforms.$.axisZ, s);
+    let best = dx;
+    let axis = d.f32(1.0);
+    if (dy < best) {
+      best = dy;
+      axis = d.f32(2.0);
+    }
+    if (dz < best) {
+      best = dz;
+      axis = d.f32(3.0);
+    }
+    return d.vec2f(best, axis);
+  };
+
+  const evalGizmo = (p: d.v3f): d.v2f => {
+    "use gpu";
+    if (gizmoUniforms.$.mode === d.u32(GIZMO_MODE_ROTATE)) {
+      return evalRotateGizmo(p);
+    }
+    return evalTranslateGizmo(p);
+  };
+
   const gizmoAxisColor = (axis: number): d.v3f => {
     "use gpu";
     const active = gizmoUniforms.$.activeAxis;
@@ -1473,7 +1531,7 @@ export function createShader(root: TgpuRoot) {
     let converged = false;
     for (let i = d.f32(0.0); i < d.f32(32.0); i += d.f32(1.0)) {
       const p = ro + rd * t;
-      const g = evalTranslateGizmo(p);
+      const g = evalGizmo(p);
       const dist = g.x;
       hitAxis = g.y;
       if (dist < GIZMO_HIT_EPS) {
@@ -1644,14 +1702,14 @@ export function createShader(root: TgpuRoot) {
         const gizmoPos = ro + rd * tGizmo;
         const eps = 0.001;
         const gx =
-          evalTranslateGizmo(gizmoPos + d.vec3f(eps, 0.0, 0.0)).x -
-          evalTranslateGizmo(gizmoPos - d.vec3f(eps, 0.0, 0.0)).x;
+          evalGizmo(gizmoPos + d.vec3f(eps, 0.0, 0.0)).x -
+          evalGizmo(gizmoPos - d.vec3f(eps, 0.0, 0.0)).x;
         const gy =
-          evalTranslateGizmo(gizmoPos + d.vec3f(0.0, eps, 0.0)).x -
-          evalTranslateGizmo(gizmoPos - d.vec3f(0.0, eps, 0.0)).x;
+          evalGizmo(gizmoPos + d.vec3f(0.0, eps, 0.0)).x -
+          evalGizmo(gizmoPos - d.vec3f(0.0, eps, 0.0)).x;
         const gz =
-          evalTranslateGizmo(gizmoPos + d.vec3f(0.0, 0.0, eps)).x -
-          evalTranslateGizmo(gizmoPos - d.vec3f(0.0, 0.0, eps)).x;
+          evalGizmo(gizmoPos + d.vec3f(0.0, 0.0, eps)).x -
+          evalGizmo(gizmoPos - d.vec3f(0.0, 0.0, eps)).x;
         const gN = std.normalize(d.vec3f(gx, gy, gz));
         const viewDir = std.normalize(d.vec3f(-rd.x, -rd.y, -rd.z));
         const rim = std.pow(1.0 - std.abs(std.dot(gN, viewDir)), 1.5) * 0.35;
