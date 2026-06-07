@@ -76,6 +76,17 @@ canvas {
   padding: 0 16px;
 }
 
+.panel-bottom-left {
+  bottom: 12px;
+  left: 12px;
+  width: fit-content;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+}
+
 .panel-label {
   font-size: 11px;
   font-weight: 600;

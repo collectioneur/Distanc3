@@ -4,6 +4,7 @@ import TopPanel from "./components/panels/TopPanel";
 import LeftPanel from "./components/panels/LeftPanel";
 import RightPanel from "./components/panels/RightPanel";
 import BottomPanel from "./components/panels/BottomPanel";
+import GizmoPanel from "./components/panels/GizmoPanel";
 import CodeExportPanel from "./components/panels/CodeExportPanel";
 import { undoScene, redoScene } from "./store/sceneStore";
 import { usePersistence } from "./store/persistence";
@@ -63,6 +64,7 @@ export default function App() {
       <div style={{ display: "none", pointerEvents: "none" }}>
         <CodeExportPanel />
       </div>
+      <GizmoPanel />
       <BottomPanel />
       {toast && (
         <div
