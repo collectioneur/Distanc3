@@ -83,8 +83,27 @@ function rotXYZ(v: Vec3, rot: Vec3): Vec3 {
   return [cz * p[0] - sz * p[1], sz * p[0] + cz * p[1], p[2]];
 }
 
+/** Inverse of rotXYZ (X→Y→Z); matches shader applyInvRotXYZ order. */
 function invRotXYZ(v: Vec3, rot: Vec3): Vec3 {
-  return rotXYZ(v, [-rot[0], -rot[1], -rot[2]]);
+  const czn = Math.cos(-rot[2]);
+  const szn = Math.sin(-rot[2]);
+  const p1: Vec3 = [
+    czn * v[0] - szn * v[1],
+    szn * v[0] + czn * v[1],
+    v[2],
+  ];
+
+  const cyn = Math.cos(-rot[1]);
+  const syn = Math.sin(-rot[1]);
+  const p2: Vec3 = [
+    cyn * p1[0] + syn * p1[2],
+    p1[1],
+    -syn * p1[0] + cyn * p1[2],
+  ];
+
+  const cxn = Math.cos(-rot[0]);
+  const sxn = Math.sin(-rot[0]);
+  return [p2[0], cxn * p2[1] - sxn * p2[2], sxn * p2[1] + cxn * p2[2]];
 }
 
 function groupRotRad(group: ObjectGroup): Vec3 {
@@ -121,11 +140,7 @@ export function getGizmoWorldPosition(root: SceneRoot, itemId: string): Vec3 | n
   if (!found) return null;
 
   const ancestors = getAncestorGroups(root, found.container.id);
-  let pos: Vec3 = [...found.item.position];
-  for (const group of ancestors) {
-    pos = applyGroupTransform(pos, group);
-  }
-  return pos;
+  return itemLocalToWorldPosition([...found.item.position], ancestors);
 }
 
 export function worldToItemLocalPosition(
@@ -133,19 +148,20 @@ export function worldToItemLocalPosition(
   ancestors: ObjectGroup[],
 ): Vec3 {
   let p = worldPos;
-  for (let i = ancestors.length - 1; i >= 0; i--) {
-    p = inverseGroupTransform(p, ancestors[i]);
+  for (const group of ancestors) {
+    p = inverseGroupTransform(p, group);
   }
   return p;
 }
 
+/** Inner-parent-first forward — matches shader transform stack order. */
 export function itemLocalToWorldPosition(
   localPos: Vec3,
   ancestors: ObjectGroup[],
 ): Vec3 {
   let p = localPos;
-  for (const group of ancestors) {
-    p = applyGroupTransform(p, group);
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    p = applyGroupTransform(p, ancestors[i]);
   }
   return p;
 }

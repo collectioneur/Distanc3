@@ -26,11 +26,7 @@ import {
   type ShapeLayer,
 } from "../store/sceneStore";
 import { useRenderStore } from "../store/renderStore";
-import {
-  clientToPickPixel,
-  computeCameraRayFromClient,
-  getCanvasAspect,
-} from "./camera";
+import { clientToPickPixel, getCanvasAspect } from "./camera";
 import {
   axisDeltaFromScreenDrag,
   beginAxisScreenDrag,
@@ -416,21 +412,6 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         return orbitPreviewRot ?? [rotX, rotY];
       }
 
-      function cameraRayFromClient(
-        clientX: number,
-        clientY: number,
-      ) {
-        const [rx, ry] = getCameraRot();
-        return computeCameraRayFromClient(
-          clientX,
-          clientY,
-          canvas!,
-          rx,
-          ry,
-          distance,
-        );
-      }
-
       let lastRenderMode = -1;
       let lastSelectedItemId: string | null = null;
       let lastRootSelected = false;
@@ -708,7 +689,12 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           gizmoDragStartWorld[1] + axisDir[1] * deltaT,
           gizmoDragStartWorld[2] + axisDir[2] * deltaT,
         ];
-        setItemWorldPosition(gizmoDragItemId, newPivot, gizmoDragAncestors);
+        const freshAncestors = getItemAncestorGroups(
+          useSceneStore.getState().root,
+          gizmoDragItemId,
+        );
+        if (!freshAncestors) return;
+        setItemWorldPosition(gizmoDragItemId, newPivot, freshAncestors);
       }
 
       function endGizmoDrag() {
