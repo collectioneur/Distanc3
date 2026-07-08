@@ -856,7 +856,6 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           clientX,
           clientY,
           gizmoDragScreen,
-          gizmoDragAxis,
         );
 
         const newPivot: [number, number, number] = [

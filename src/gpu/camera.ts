@@ -5,10 +5,15 @@ export type CameraRay = {
   direction: Vec3;
 };
 
+/**
+ * Must match shader rot2D: WGSL `mat2x2f(c, -s, s, c) * v` is column-major,
+ * i.e. (c*x + s*y, -s*x + c*y). Getting the sign wrong here desyncs every
+ * CPU-side pick/projection from the rendered image (phantom gizmo hotspots).
+ */
 function rot2D(angle: number, x: number, z: number): [number, number] {
   const c = Math.cos(angle);
   const s = Math.sin(angle);
-  return [c * x - s * z, s * x + c * z];
+  return [c * x + s * z, -s * x + c * z];
 }
 
 /** Match fragment shader camera: orbit around origin, perspective along +Z. */

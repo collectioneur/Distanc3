@@ -19,19 +19,6 @@ export const GIZMO_SCALE_FACTOR = 0.15;
 /** Floor for projected axis length (px) — stabilizes foreshortened Z drag speed. */
 export const MIN_SCREEN_AXIS_DRAG_PX = 24;
 
-/** Screen drag sign per axis (+Z is mirrored vs its screen projection). */
-export const GIZMO_DRAG_AXIS_SIGN: Record<GizmoAxis, number> = {
-  x: 1,
-  y: 1,
-  z: -1,
-};
-
-/** Ring rotation sign per axis (screen Y-down vs world Y-up; Z unlike X/Y). */
-export const GIZMO_ROTATE_AXIS_SIGN: Record<GizmoAxis, number> = {
-  x: -1,
-  y: -1,
-  z: 1,
-};
 export const GIZMO_ARROW_LENGTH_RATIO = 0.85;
 export const GIZMO_SHAFT_RADIUS_RATIO = 0.035;
 export const GIZMO_HEAD_RADIUS_RATIO = 0.08;
@@ -978,15 +965,12 @@ export function axisDeltaFromScreenDrag(
   clientX: number,
   clientY: number,
   state: AxisScreenDragState,
-  axis: GizmoAxis,
 ): number {
   const mx = clientX - state.startClientX;
   const my = clientY - state.startClientY;
   const screenDelta =
     mx * state.screenAxisDir[0] + my * state.screenAxisDir[1];
-  return (
-    screenDelta * state.worldPerScreenPx * GIZMO_DRAG_AXIS_SIGN[axis]
-  );
+  return screenDelta * state.worldPerScreenPx;
 }
 
 type Mat3 = [
@@ -1312,9 +1296,7 @@ export function ringTotalAngleFromScreenDrag(
   );
   if (!dir) return null;
 
-  const raw =
-    signedRingAngle(state.startDir, dir, state.worldAxis) *
-    GIZMO_ROTATE_AXIS_SIGN[state.dragAxis];
+  const raw = signedRingAngle(state.startDir, dir, state.worldAxis);
   return unwrapRingAngle(raw, state.totalAngleRad);
 }
 

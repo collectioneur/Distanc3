@@ -8,6 +8,20 @@ import {
   rootItemsToArborist,
   type ArboristNode,
 } from "../../scene/arboristAdapter";
+import {
+  Box,
+  Boxes,
+  ChevronDown,
+  ChevronRight,
+  Circle,
+  Cone,
+  Cylinder,
+  Pill,
+  Plus,
+  Torus,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { useElementSize } from "../../hooks/useElementSize";
 import {
   useSceneStore,
@@ -19,13 +33,13 @@ import {
 } from "../../store/sceneStore";
 import { showToast } from "../../utils/toast";
 
-const SHAPE_ICON: Record<string, string> = {
-  sphere: "○",
-  box: "□",
-  torus: "◎",
-  cylinder: "⌀",
-  capsule: "⬬",
-  cone: "△",
+const SHAPE_ICON: Record<string, LucideIcon> = {
+  sphere: Circle,
+  box: Box,
+  torus: Torus,
+  cylinder: Cylinder,
+  capsule: Pill,
+  cone: Cone,
 };
 
 const OP_ICON: Record<OpType, string> = {
@@ -79,12 +93,15 @@ function SceneNode({
           }}
           title={node.isOpen ? "Collapse" : "Expand"}
         >
-          {node.isOpen ? "▼" : "▶"}
+          {node.isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </button>
       )}
       {!isGroup && <span className="scene-item-icon scene-item-icon--spacer" />}
       <span className="scene-item-icon">
-        {isGroup ? "◫" : SHAPE_ICON[data.shapeType ?? "sphere"]}
+        {(() => {
+          const Icon = isGroup ? Boxes : SHAPE_ICON[data.shapeType ?? "sphere"];
+          return <Icon size={14} />;
+        })()}
       </span>
       <span className="scene-item-name">{data.name}</span>
       {showOp && (
@@ -102,7 +119,7 @@ function SceneNode({
             removeItem(containerId, data.id);
           }}
         >
-          ×
+          <X size={13} />
         </button>
       )}
     </div>
@@ -201,7 +218,7 @@ function SceneRootHeader({
           }}
           title={collapsed ? "Expand" : "Collapse"}
         >
-          {collapsed ? "▶" : "▼"}
+          {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
         </button>
         <span className="scene-object-name">{root.name}</span>
       </div>
@@ -319,7 +336,7 @@ export default function LeftPanel() {
                 : "Add nested object to selected container"
           }
         >
-          + Object
+          <Plus size={13} /> Object
         </button>
       </div>
     </div>

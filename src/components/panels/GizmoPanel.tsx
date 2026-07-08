@@ -1,8 +1,9 @@
+import { Move, RotateCw, type LucideIcon } from "lucide-react";
 import { useGizmoStore, type GizmoMode } from "../../store/gizmoStore";
 
-const MODES: { value: GizmoMode; label: string; icon: string }[] = [
-  { value: "translate", label: "Move", icon: "↔" },
-  { value: "rotate", label: "Rotate", icon: "↻" },
+const MODES: { value: GizmoMode; label: string; icon: LucideIcon }[] = [
+  { value: "translate", label: "Move", icon: Move },
+  { value: "rotate", label: "Rotate", icon: RotateCw },
 ];
 
 export default function GizmoPanel() {
@@ -13,14 +14,16 @@ export default function GizmoPanel() {
     <div className="panel panel-bottom-left">
       <span className="panel-label">Gizmo</span>
       <div className="top-panel-shapes">
-        {MODES.map((m) => (
+        {MODES.map(({ value, label, icon: Icon }) => (
           <button
-            key={m.value}
-            className={`shape-btn${mode === m.value ? " shape-btn--active" : ""}`}
-            onClick={() => setMode(m.value)}
+            key={value}
+            className={`shape-btn${mode === value ? " shape-btn--active" : ""}`}
+            onClick={() => setMode(value)}
           >
-            <span className="shape-btn-icon">{m.icon}</span>
-            <span className="shape-btn-label">{m.label}</span>
+            <span className="shape-btn-icon">
+              <Icon size={14} />
+            </span>
+            <span className="shape-btn-label">{label}</span>
           </button>
         ))}
       </div>

@@ -1,9 +1,10 @@
+import { Hash, Ruler, Sun, type LucideIcon } from "lucide-react";
 import { useRenderStore, type RenderMode } from "../../store/renderStore";
 
-const MODES: { value: RenderMode; label: string; icon: string }[] = [
-  { value: 0, label: "Lit", icon: "💡" },
-  { value: 1, label: "Depth", icon: "📏" },
-  { value: 2, label: "Steps", icon: "🔢" },
+const MODES: { value: RenderMode; label: string; icon: LucideIcon }[] = [
+  { value: 0, label: "Lit", icon: Sun },
+  { value: 1, label: "Depth", icon: Ruler },
+  { value: 2, label: "Steps", icon: Hash },
 ];
 
 export default function BottomPanel() {
@@ -14,14 +15,16 @@ export default function BottomPanel() {
     <div className="panel panel-bottom">
       <span className="panel-label">Render</span>
       <div className="top-panel-shapes">
-        {MODES.map((m) => (
+        {MODES.map(({ value, label, icon: Icon }) => (
           <button
-            key={m.value}
-            className={`shape-btn${renderMode === m.value ? " shape-btn--active" : ""}`}
-            onClick={() => setRenderMode(m.value)}
+            key={value}
+            className={`shape-btn${renderMode === value ? " shape-btn--active" : ""}`}
+            onClick={() => setRenderMode(value)}
           >
-            <span className="shape-btn-icon">{m.icon}</span>
-            <span className="shape-btn-label">{m.label}</span>
+            <span className="shape-btn-icon">
+              <Icon size={14} />
+            </span>
+            <span className="shape-btn-label">{label}</span>
           </button>
         ))}
       </div>
