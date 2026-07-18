@@ -26,7 +26,6 @@ import {
   type ShapeLayer,
 } from "../store/sceneStore";
 import { useGizmoStore } from "../store/gizmoStore";
-import { useRenderStore } from "../store/renderStore";
 import { clientToPickPixel, getCanvasAspect } from "./camera";
 import {
   applyWorldRotationToItem,
@@ -422,7 +421,6 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         return orbitPreviewRot ?? [rotX, rotY];
       }
 
-      let lastRenderMode = -1;
       let lastSelectedItemId: string | null = null;
       let lastRootSelected = false;
       let sceneGpuDirty = true;
@@ -1084,14 +1082,12 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         sceneRoot: SceneRoot,
         selectedItemId: string | null,
         rootSelected: boolean,
-        renderMode: number,
       ) {
         const { instructions, objectInfos, objectCount } = buildGpuData(sceneRoot);
         instructionsBuffer.write(instructions);
         objectInfoBuffer.write(objectInfos);
         sceneUniforms.write({
           objectCount,
-          renderMode,
         });
 
         const selection = buildSelectionGpuData(
@@ -1122,10 +1118,8 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         initialState.root,
         initialState.selectedItemId,
         initialState.rootSelected,
-        useRenderStore.getState().renderMode,
       );
       lastRoot = initialState.root;
-      lastRenderMode = useRenderStore.getState().renderMode;
       lastSelectedItemId = initialState.selectedItemId;
       lastRootSelected = initialState.rootSelected;
 
@@ -1143,19 +1137,15 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
 
         const { root: sceneRoot, selectedItemId, rootSelected } =
           useSceneStore.getState();
-        const renderMode = useRenderStore.getState().renderMode;
-
         if (
           sceneGpuDirty ||
           sceneRoot !== lastRoot ||
-          renderMode !== lastRenderMode ||
           selectedItemId !== lastSelectedItemId ||
           rootSelected !== lastRootSelected
         ) {
-          uploadSceneGpu(sceneRoot, selectedItemId, rootSelected, renderMode);
+          uploadSceneGpu(sceneRoot, selectedItemId, rootSelected);
 
           lastRoot = sceneRoot;
-          lastRenderMode = renderMode;
           lastSelectedItemId = selectedItemId;
           lastRootSelected = rootSelected;
           sceneGpuDirty = false;

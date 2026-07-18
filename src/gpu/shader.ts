@@ -69,7 +69,6 @@ const CameraUniforms = d.struct({
 
 const SceneUniforms = d.struct({
   objectCount: d.u32,
-  renderMode: d.u32,
 });
 
 const SelectionUniforms = d.struct({
@@ -127,8 +126,6 @@ const RAY_MISS_T = 50.0;
 /** Surface tie epsilon for pick — prefer smaller CSG subtree (more specific item). */
 const PICK_TIE_EPS = 0.002;
 
-/** Fragment shader mode: ray-march scene and output pick object id (1 byte in R). */
-export const RENDER_MODE_PICK = 3;
 /** Pick pass: ray-march translate gizmo, output axis id 1/2/3 in R. */
 export const PICK_PASS_GIZMO = 2;
 
@@ -141,7 +138,6 @@ export function createShader(root: TgpuRoot) {
   });
   const sceneUniforms = root.createUniform(SceneUniforms, {
     objectCount: 0,
-    renderMode: 0,
   });
   const selectionUniforms = root.createUniform(SelectionUniforms, {
     enabled: 0,
@@ -1621,7 +1617,6 @@ export function createShader(root: TgpuRoot) {
   const fragment = ({ uv }: { uv: d.v2f }) => {
     "use gpu";
 
-    const mode = sceneUniforms.$.renderMode;
     const pickPass = pickUniforms.$.pickPass;
     const isScenePickPass = pickPass === d.u32(1);
     const isGizmoPickPass = pickPass === d.u32(2);
@@ -1686,40 +1681,26 @@ export function createShader(root: TgpuRoot) {
 
     let col = d.vec3f(0.05, 0.05, 0.08);
 
-    if (!sceneHit) {
-      if (mode !== d.u32(0)) {
-        col = d.vec3f(0.0, 0.0, 0.0);
-      }
-    } else {
+    if (sceneHit) {
       const pos = ro + rd * tScene;
-
-      if (mode === d.u32(1)) {
-        const depth = std.clamp(tScene / 5.0, 0.0, 1.0);
-        const brightness = 1.0 - depth;
-        col = d.vec3f(brightness, brightness, brightness);
-      } else if (mode === d.u32(2)) {
-        const brightness = std.clamp(iterations / 64.0, 0.0, 1.0);
-        col = d.vec3f(brightness, brightness, brightness);
-      } else {
-        const N = calcNormal(pos);
-        const lightDir = std.normalize(d.vec3f(2.0, 3.0, -1.0));
-        const diff = std.max(std.dot(N, lightDir), 0.0);
-        const viewDir = d.vec3f(-rd.x, -rd.y, -rd.z);
-        const fresnel = std.pow(1.0 - std.abs(std.dot(N, viewDir)), 3.0) * 0.5;
-        const halfDir = std.normalize(lightDir + viewDir);
-        const spec = std.pow(std.max(std.dot(N, halfDir), 0.0), 64.0) * 1.5;
-        const ao = 1.0 - std.clamp(iterations / 64.0, 0.0, 1.0) * 0.4;
-        const baseColor = d.vec3f(0.55, 0.65, 0.95);
-        col = std.sqrt(
-          std.max(
-            (baseColor * (diff * 0.8 + 0.2) +
-              d.vec3f(1.0, 1.0, 1.0) * spec +
-              baseColor * fresnel) *
-              ao,
-            d.vec3f(0.0),
-          ),
-        );
-      }
+      const N = calcNormal(pos);
+      const lightDir = std.normalize(d.vec3f(2.0, 3.0, -1.0));
+      const diff = std.max(std.dot(N, lightDir), 0.0);
+      const viewDir = d.vec3f(-rd.x, -rd.y, -rd.z);
+      const fresnel = std.pow(1.0 - std.abs(std.dot(N, viewDir)), 3.0) * 0.5;
+      const halfDir = std.normalize(lightDir + viewDir);
+      const spec = std.pow(std.max(std.dot(N, halfDir), 0.0), 64.0) * 1.5;
+      const ao = 1.0 - std.clamp(iterations / 64.0, 0.0, 1.0) * 0.4;
+      const baseColor = d.vec3f(0.55, 0.65, 0.95);
+      col = std.sqrt(
+        std.max(
+          (baseColor * (diff * 0.8 + 0.2) +
+            d.vec3f(1.0, 1.0, 1.0) * spec +
+            baseColor * fresnel) *
+            ao,
+          d.vec3f(0.0),
+        ),
+      );
     }
 
     if (outlineVisible) {
