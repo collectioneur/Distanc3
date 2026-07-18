@@ -567,35 +567,70 @@ canvas {
   opacity: 0.4;
 }
 
-/* ─── Code export panel ──────────────────────────────────────── */
+/* ─── Right panel tabs + code view ───────────────────────────── */
 
-.panel-code-export {
-  right: var(--space-3);
-  bottom: var(--space-3);
-  width: 220px;
+.panel-header--tabs {
+  display: flex;
+  gap: var(--space-3);
+  padding: 0 14px;
+}
+
+.panel-tab {
+  padding: 10px 0 8px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-4);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.panel-tab:hover:not(.panel-tab--active) {
+  color: var(--text-3);
+}
+
+.panel-tab--active {
+  color: var(--text-1);
+}
+
+.panel-tab-divider {
+  width: 1px;
+  align-self: center;
+  height: 14px;
+  background: var(--border-1);
+}
+
+.code-view {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  user-select: text;
 }
 
-.code-header {
+.code-langs {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  gap: var(--space-1);
   padding: var(--space-2) 10px;
   border-bottom: 1px solid var(--border-3);
-  gap: var(--space-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  cursor: grab;
+  touch-action: none;
 }
 
-.code-tabs {
-  display: flex;
-  gap: 2px;
-  background: var(--bg-input);
-  border-radius: var(--radius-md);
-  padding: 2px;
+.code-langs::-webkit-scrollbar {
+  display: none;
 }
 
-.code-tab {
+.code-langs:active {
+  cursor: grabbing;
+}
+
+.code-lang {
   padding: 3px 10px;
   border: none;
   border-radius: var(--radius-sm);
@@ -608,22 +643,36 @@ canvas {
     background var(--transition-fast),
     color var(--transition-fast);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.code-tab:hover:not(.code-tab--active) {
+.code-lang:hover:not(.code-lang--active) {
   color: rgba(255, 255, 255, 0.7);
 }
 
-.code-tab--active {
+.code-lang--active {
   background: var(--accent-strong);
   color: var(--accent-text);
 }
 
+.code-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  user-select: text;
+}
+
 .code-copy-btn {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 1;
   padding: 3px 10px;
   border: 1px solid var(--border-1);
   border-radius: 5px;
-  background: var(--bg-input);
+  background: var(--bg-panel);
   color: var(--text-3);
   font-size: var(--text-xs);
   font-weight: 500;
@@ -633,7 +682,6 @@ canvas {
     border-color var(--transition-fast),
     color var(--transition-fast);
   white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .code-copy-btn:hover {
@@ -643,17 +691,27 @@ canvas {
 }
 
 .code-pre {
+  flex: 1;
+  min-height: 0;
   margin: 0;
   padding: 10px var(--space-3);
   font-family: var(--font-mono);
   font-size: 10.5px;
   line-height: 1.55;
   color: var(--scale-7);
-  max-height: 168px;
-  overflow-y: auto;
-  overflow-x: auto;
+  overflow: auto;
   white-space: pre;
   tab-size: 2;
+}
+
+/* shiki emits its own <pre> with an inline theme background — flatten it */
+.code-pre .shiki {
+  margin: 0;
+  background: transparent !important;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre;
 }
 
 .code-pre::-webkit-scrollbar {

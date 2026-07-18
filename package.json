@@ -11,10 +11,13 @@
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@shikijs/langs": "^4.3.1",
+    "@shikijs/themes": "^4.3.1",
     "lucide-react": "^1.23.0",
     "react": "^19.0.0",
     "react-arborist": "^3.8.0",
     "react-dom": "^19.0.0",
+    "shiki": "^4.3.1",
     "typegpu": "^0.11.4",
     "zundo": "^2.3.0",
     "zustand": "^5.0.13"

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   useSceneStore,
   temporalStore,
@@ -7,6 +8,7 @@ import {
   type ShapeLayer,
 } from "../../store/sceneStore";
 import { roundTo } from "../../utils/round";
+import CodeView from "./CodeView";
 
 // ── Shared numeric input ──────────────────────────────────────────────────────
 
@@ -322,6 +324,7 @@ export default function RightPanel() {
   const root = useSceneStore((s) => s.root);
   const selectedItemId = useSceneStore((s) => s.selectedItemId);
   const rootSelected = useSceneStore((s) => s.rootSelected);
+  const [tab, setTab] = useState<"props" | "code">("props");
 
   const found = selectedItemId ? findItem(root, selectedItemId) : null;
 
@@ -351,11 +354,29 @@ export default function RightPanel() {
 
   return (
     <div className="panel panel-right">
-      <div className="panel-header">Properties</div>
-      <>
-        <div className="props-shape-name">{title}</div>
-        {content}
-      </>
+      <div className="panel-header panel-header--tabs">
+        <button
+          className={`panel-tab${tab === "props" ? " panel-tab--active" : ""}`}
+          onClick={() => setTab("props")}
+        >
+          Properties
+        </button>
+        <div className="panel-tab-divider" />
+        <button
+          className={`panel-tab${tab === "code" ? " panel-tab--active" : ""}`}
+          onClick={() => setTab("code")}
+        >
+          Code
+        </button>
+      </div>
+      {tab === "props" ? (
+        <>
+          <div className="props-shape-name">{title}</div>
+          {content}
+        </>
+      ) : (
+        <CodeView />
+      )}
     </div>
   );
 }

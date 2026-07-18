@@ -5,7 +5,6 @@ import LeftPanel from "./components/panels/LeftPanel";
 import RightPanel from "./components/panels/RightPanel";
 import GizmoPanel from "./components/panels/GizmoPanel";
 import RenderModePanel from "./components/panels/RenderModePanel";
-import CodeExportPanel from "./components/panels/CodeExportPanel";
 import { undoScene, redoScene } from "./store/sceneStore";
 import { usePersistence } from "./store/persistence";
 import { setToastListener } from "./utils/toast";
@@ -62,9 +61,6 @@ export default function App() {
       <RenderModePanel />
       <LeftPanel />
       <RightPanel />
-      <div style={{ display: "none", pointerEvents: "none" }}>
-        <CodeExportPanel />
-      </div>
       <GizmoPanel />
       {toast && (
         <div
