@@ -1,30 +1,47 @@
 /* ─── Design tokens ──────────────────────────────────────────── */
 
 :root {
+  /* Scene gradient anchors (match shader.ts) */
+  --scene-bg-0: #0e0e0e;
+  --scene-bg-1: #1e1e1e;
+
+  /* Neutral scale: scene background → white */
+  --scale-0: var(--scene-bg-0);
+  --scale-1: var(--scene-bg-1);
+  --scale-2: #2e2e2e;
+  --scale-3: #404040;
+  --scale-4: #525252;
+  --scale-5: #666666;
+  --scale-6: #808080;
+  --scale-7: #a0a0a0;
+  --scale-8: #c0c0c0;
+  --scale-9: #e0e0e0;
+  --scale-10: #ffffff;
+
   /* Surfaces */
   --bg-canvas: #000;
-  --bg-panel: rgba(8, 10, 18, 0.86);
+  --bg-panel: rgba(14, 14, 14, 0.86);
   --bg-input: rgba(255, 255, 255, 0.05);
-  --bg-input-focus: rgba(99, 102, 241, 0.07);
+  --bg-input-focus: rgba(255, 255, 255, 0.07);
   --bg-hover: rgba(255, 255, 255, 0.05);
-  --bg-option: #1a1c2e;
+  --bg-option: var(--scale-1);
 
-  /* Accent (indigo) */
-  --accent: #6366f1;
-  --accent-secondary: #8b5cf6;
-  --accent-text: #e0e2ff;
-  --accent-soft: rgba(99, 102, 241, 0.12);
-  --accent-mid: rgba(99, 102, 241, 0.2);
-  --accent-strong: rgba(99, 102, 241, 0.3);
-  --accent-border: rgba(99, 102, 241, 0.5);
+  /* Accent (scale steps) */
+  --accent: var(--scale-6);
+  --accent-secondary: var(--scale-7);
+  --accent-text: var(--scale-9);
+  --accent-soft: rgba(255, 255, 255, 0.08);
+  --accent-mid: rgba(255, 255, 255, 0.12);
+  --accent-strong: rgba(255, 255, 255, 0.18);
+  --accent-border: rgba(255, 255, 255, 0.35);
 
   /* Danger */
   --danger: #f87171;
   --danger-soft: rgba(239, 68, 68, 0.2);
 
   /* Text */
-  --text-1: #e2e4f0; /* headings, emphasized */
-  --text-2: #c8ccd6; /* default body */
+  --text-1: var(--scale-9); /* headings, emphasized */
+  --text-2: var(--scale-8); /* default body */
   --text-3: rgba(255, 255, 255, 0.45); /* labels */
   --text-4: rgba(255, 255, 255, 0.28); /* section titles, hints */
 
@@ -55,6 +72,9 @@
   /* Effects */
   --blur-panel: blur(16px) saturate(1.1);
   --transition-fast: 0.15s;
+
+  /* Side panels — height synced from Scene panel before first paint */
+  --scene-panel-height: 180px;
 }
 
 *,
@@ -132,9 +152,10 @@ canvas {
   padding: 0 var(--space-4);
 }
 
-.panel-bottom-left {
+.panel-bottom-center {
   bottom: var(--space-3);
-  left: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
   width: fit-content;
   height: 52px;
   display: flex;
@@ -254,13 +275,89 @@ canvas {
   font-weight: 500;
 }
 
+/* ─── Render mode dropdown (top right) ───────────────────────── */
+
+.panel-render-mode {
+  top: var(--space-3);
+  right: var(--space-3);
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+}
+
+.render-mode-trigger {
+  gap: 6px;
+}
+
+.render-mode-chevron {
+  opacity: 0.55;
+  transition: transform var(--transition-fast);
+}
+
+.render-mode-chevron--open {
+  transform: rotate(180deg);
+}
+
+.render-mode-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 136px;
+  background: var(--bg-panel);
+  backdrop-filter: var(--blur-panel);
+  -webkit-backdrop-filter: var(--blur-panel);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 20;
+}
+
+.render-mode-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.render-mode-option:hover {
+  background: var(--bg-hover);
+  color: var(--accent-text);
+}
+
+.render-mode-option--active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.render-mode-option .shape-btn-label {
+  flex: 1;
+}
+
+.render-mode-check {
+  margin-left: auto;
+  opacity: 0.8;
+}
+
 /* ─── Left panel ─────────────────────────────────────────────── */
 
 .panel-left {
   left: var(--space-3);
-  top: 0;
-  bottom: 0;
-  margin-block: auto;
+  top: 15vh;
   width: 230px;
   height: fit-content;
   max-height: 70vh;
@@ -270,7 +367,7 @@ canvas {
 
 .scene-list {
   flex: 1;
-  min-height: 0;
+  min-height: 80px;
   overflow: hidden;
   padding: 6px 0;
 }
@@ -394,13 +491,13 @@ canvas {
 /* ─── Right panel ────────────────────────────────────────────── */
 
 .panel-right {
-  top: 50%;
-  transform: translateY(-50%);
+  top: 15vh;
+  height: var(--scene-panel-height);
   right: var(--space-3);
   width: 220px;
-  height: 60vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .props-shape-name {
@@ -411,6 +508,8 @@ canvas {
 }
 
 .props-content {
+  flex: 1;
+  min-height: 0;
   padding: var(--space-1) 14px var(--space-3);
   display: flex;
   flex-direction: column;
@@ -550,7 +649,7 @@ canvas {
   font-family: var(--font-mono);
   font-size: 10.5px;
   line-height: 1.55;
-  color: #b8c0d8;
+  color: var(--scale-7);
   max-height: 168px;
   overflow-y: auto;
   overflow-x: auto;
@@ -649,20 +748,20 @@ canvas {
 
 .scene-item--op.scene-item--selected {
   opacity: 1;
-  background: rgba(139, 92, 246, 0.12);
+  background: var(--accent-soft);
   border-left-color: var(--accent-secondary);
 }
 
 .scene-item-icon--op {
   font-size: var(--text-sm);
   opacity: 0.9;
-  color: #a78bfa;
+  color: var(--accent-secondary);
   font-family: var(--font-mono);
 }
 
 .scene-item-name--op {
   font-size: var(--text-xs);
-  color: #a78bfa;
+  color: var(--accent-secondary);
 }
 
 /* Add object footer */
@@ -693,7 +792,7 @@ canvas {
 
 .add-object-btn:hover:not(:disabled) {
   background: var(--accent-soft);
-  border-color: rgba(99, 102, 241, 0.4);
+  border-color: var(--accent-border);
   color: var(--accent-text);
   border-style: solid;
 }

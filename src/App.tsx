@@ -4,6 +4,7 @@ import TopPanel from "./components/panels/TopPanel";
 import LeftPanel from "./components/panels/LeftPanel";
 import RightPanel from "./components/panels/RightPanel";
 import GizmoPanel from "./components/panels/GizmoPanel";
+import RenderModePanel from "./components/panels/RenderModePanel";
 import CodeExportPanel from "./components/panels/CodeExportPanel";
 import { undoScene, redoScene } from "./store/sceneStore";
 import { usePersistence } from "./store/persistence";
@@ -58,6 +59,7 @@ export default function App() {
     <>
       <Canvas />
       <TopPanel />
+      <RenderModePanel />
       <LeftPanel />
       <RightPanel />
       <div style={{ display: "none", pointerEvents: "none" }}>
@@ -71,7 +73,7 @@ export default function App() {
             bottom: 24,
             left: "50%",
             transform: "translateX(-50%)",
-            background: "rgba(20, 20, 24, 0.92)",
+            background: "rgba(20, 20, 20, 0.92)",
             color: "#f0f0f0",
             padding: "10px 16px",
             borderRadius: 8,

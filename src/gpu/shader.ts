@@ -69,12 +69,20 @@ const CameraUniforms = d.struct({
 
 const SceneUniforms = d.struct({
   objectCount: d.u32,
+  boundsRadius: d.f32, // conservative world-space bounding sphere of scene
+  renderMode: d.u32, // RENDER_MODE_CLASSIC | RENDER_MODE_CHROME
+  _pad1: d.f32,
+  boundsCenter: d.vec3f,
+  _pad2: d.f32,
 });
 
 const SelectionUniforms = d.struct({
   enabled: d.u32,
   usesSceneSdf: d.u32,
   count: d.u32,
+  boundsRadius: d.f32, // conservative world bounding sphere of selected subtree
+  boundsCenter: d.vec3f,
+  _pad: d.f32,
 });
 
 const GizmoUniforms = d.struct({
@@ -114,8 +122,8 @@ const emptyInstruction = {
 
 const emptyObjectInfo = { start: 0, count: 0 };
 
-const OUTLINE_OFFSET = 0.01;
-const OUTLINE_BAND = 0.01;
+export const OUTLINE_OFFSET = 0.01;
+export const OUTLINE_BAND = 0.01;
 const OUTLINE_STRENGTH = 0.5;
 const OUTLINE_RIM_POWER = 1.0;
 const OUTLINE_GRAD_LO = 1.06;
@@ -129,6 +137,11 @@ const PICK_TIE_EPS = 0.002;
 /** Pick pass: ray-march translate gizmo, output axis id 1/2/3 in R. */
 export const PICK_PASS_GIZMO = 2;
 
+/** Cheap lit shading (no reflection bounce, iteration-based AO). */
+export const RENDER_MODE_CLASSIC = 0;
+/** Reflective chrome shading (reflection march + AO + tonemap). */
+export const RENDER_MODE_CHROME = 1;
+
 export function createShader(root: TgpuRoot) {
   const cameraUniforms = root.createUniform(CameraUniforms, {
     time: 0,
@@ -138,11 +151,19 @@ export function createShader(root: TgpuRoot) {
   });
   const sceneUniforms = root.createUniform(SceneUniforms, {
     objectCount: 0,
+    boundsRadius: 0,
+    renderMode: RENDER_MODE_CHROME,
+    _pad1: 0,
+    boundsCenter: d.vec3f(0, 0, 0),
+    _pad2: 0,
   });
   const selectionUniforms = root.createUniform(SelectionUniforms, {
     enabled: 0,
     usesSceneSdf: 0,
     count: 0,
+    boundsRadius: 0,
+    boundsCenter: d.vec3f(0, 0, 0),
+    _pad: 0,
   });
   const gizmoUniforms = root.createUniform(GizmoUniforms, {
     enabled: 0,
@@ -760,6 +781,35 @@ export function createShader(root: TgpuRoot) {
     return dist;
   };
 
+  // Ray vs sphere: returns (tEnter, tExit); tExit < 0 = miss.
+  const raySphere = (
+    ro: d.v3f,
+    rd: d.v3f,
+    center: d.v3f,
+    r: number,
+  ): d.v2f => {
+    "use gpu";
+    const oc = ro - center;
+    const b = std.dot(oc, rd);
+    const h = b * b - (std.dot(oc, oc) - r * r);
+    if (h < 0.0) {
+      return d.vec2f(0.0, -1.0);
+    }
+    const sh = std.sqrt(h);
+    return d.vec2f(std.max(-b - sh, 0.0), -b + sh);
+  };
+
+  // Ray vs scene bounding sphere.
+  const rayBounds = (ro: d.v3f, rd: d.v3f): d.v2f => {
+    "use gpu";
+    return raySphere(
+      ro,
+      rd,
+      sceneUniforms.$.boundsCenter,
+      sceneUniforms.$.boundsRadius,
+    );
+  };
+
   // Evaluate SDF for an instruction range from the selection buffer.
   const evalSelectionInstructionRange = (
     p: d.v3f,
@@ -1366,7 +1416,6 @@ export function createShader(root: TgpuRoot) {
     return s0;
   };
 
-
   const resolvePickObjectId = (p: d.v3f): d.u32 => {
     "use gpu";
     let bestId = d.u32(0);
@@ -1398,21 +1447,18 @@ export function createShader(root: TgpuRoot) {
   };
 
   // Rim + creases on the inflated selection shell.
+  // Tetrahedron gradient: 4 SDF evals instead of 6 (same trick as calcNormal).
   const selectionOutlineMask = (p: d.v3f, rd: d.v3f): number => {
     "use gpu";
     const e = 0.001;
-    const dx =
-      evalSelectionDist(p + d.vec3f(e, 0.0, 0.0)) -
-      evalSelectionDist(p - d.vec3f(e, 0.0, 0.0));
-    const dy =
-      evalSelectionDist(p + d.vec3f(0.0, e, 0.0)) -
-      evalSelectionDist(p - d.vec3f(0.0, e, 0.0));
-    const dz =
-      evalSelectionDist(p + d.vec3f(0.0, 0.0, e)) -
-      evalSelectionDist(p - d.vec3f(0.0, 0.0, e));
-    const grad = d.vec3f(dx, dy, dz);
+    const k = d.vec2f(1.0, -1.0);
+    const grad =
+      d.vec3f(k.x, k.y, k.y) * evalSelectionDist(p + d.vec3f(e, -e, -e)) +
+      d.vec3f(k.y, k.y, k.x) * evalSelectionDist(p + d.vec3f(-e, -e, e)) +
+      d.vec3f(k.y, k.x, k.y) * evalSelectionDist(p + d.vec3f(-e, e, -e)) +
+      d.vec3f(k.x, k.x, k.x) * evalSelectionDist(p + d.vec3f(e, e, e));
     const N = std.normalize(grad);
-    const gradMag = std.length(grad) / (2.0 * e);
+    const gradMag = std.length(grad) / (4.0 * e);
     const viewDir = std.normalize(d.vec3f(-rd.x, -rd.y, -rd.z));
     const rim = std.pow(1.0 - std.abs(std.dot(N, viewDir)), OUTLINE_RIM_POWER);
     const gradEdge = std.smoothstep(OUTLINE_GRAD_LO, OUTLINE_GRAD_HI, gradMag);
@@ -1420,18 +1466,45 @@ export function createShader(root: TgpuRoot) {
     return std.smoothstep(OUTLINE_EDGE_LO, OUTLINE_EDGE_HI, edge);
   };
 
-  const rayMarchSelectionOutline = (ro: d.v3f, rd: d.v3f): number => {
+  const rayMarchSelectionOutline = (
+    ro: d.v3f,
+    rd: d.v3f,
+    tScene: number,
+  ): number => {
     "use gpu";
-    let t = d.f32(0.0);
+    // Tight gate: selection's own bounding sphere, not the whole scene.
+    const bounds = raySphere(
+      ro,
+      rd,
+      selectionUniforms.$.boundsCenter,
+      selectionUniforms.$.boundsRadius,
+    );
+    if (bounds.y < 0.0) {
+      return d.f32(RAY_MISS_T + 10.0);
+    }
+    // Outline only shows if closer than the scene hit; no point marching past it.
+    const tFar = std.min(bounds.y, tScene + 0.01);
+    let t = bounds.x;
+    if (t > tFar) {
+      return d.f32(RAY_MISS_T + 10.0);
+    }
     for (let i = d.f32(0.0); i < d.f32(24.0); i += d.f32(1.0)) {
       const p = ro + rd * t;
       const dSel = evalSelectionDist(p);
       const dist = std.abs(dSel - OUTLINE_OFFSET) - OUTLINE_BAND;
       t += dist;
-      if (dist < 0.0001 || t > 100.0) {
-        break;
+      if (dist < 0.0001) {
+        return t;
+      }
+      // Left the gate without converging — explicit miss. With the tight
+      // selection sphere the exit point is near the object, where the mask
+      // is non-zero, so returning t here would paint the sphere as a halo.
+      if (t > tFar) {
+        return d.f32(RAY_MISS_T + 10.0);
       }
     }
+    // Ran out of steps while still inside: grazing the shell. Keep t so the
+    // mask decides, matching pre-optimization behavior at the rim.
     return t;
   };
 
@@ -1579,6 +1652,82 @@ export function createShader(root: TgpuRoot) {
     return d.vec2f(t, hitAxis);
   };
 
+  // ── Chrome shading ────────────────────────────────────────────────────────
+
+  const acesTonemap = (x: d.v3f): d.v3f => {
+    "use gpu";
+    const num = mulVec3(x, x * 2.51 + d.vec3f(0.03));
+    const den = mulVec3(x, x * 2.43 + d.vec3f(0.59)) + d.vec3f(0.14);
+    return std.min(std.max(divAccSclBy(num, den), d.vec3f(0.0)), d.vec3f(1.0));
+  };
+
+  // Procedural studio environment: dark gray room + softbox strips.
+  // ponytail: analytic bands instead of an HDRI texture — good enough for
+  // chrome reflections; upgrade path is a real cubemap if art needs it.
+  const envColor = (rd: d.v3f): d.v3f => {
+    "use gpu";
+    const up = rd.y * 0.5 + 0.5;
+    let v = std.mix(0.015, 0.06, up);
+
+    const horizLen = std.max(std.length(d.vec2f(rd.x, rd.z)), 0.0001);
+    const hx = rd.x / horizLen;
+    const hz = rd.z / horizLen;
+
+    // Tall vertical softbox, front-left
+    const a1 = std.max(hx * -0.7071 - hz * 0.7071, 0.0);
+    const s1 =
+      std.pow(a1, 22.0) * (1.0 - std.smoothstep(0.55, 0.9, std.abs(rd.y)));
+
+    // Narrower vertical strip, right
+    const a2 = std.max(hx * 0.866 - hz * 0.5, 0.0);
+    const s2 =
+      std.pow(a2, 40.0) * (1.0 - std.smoothstep(0.5, 0.85, std.abs(rd.y)));
+
+    // Broad overhead softbox
+    const sTop = std.smoothstep(0.35, 0.85, rd.y);
+
+    // Faint floor bounce so downward faces aren't dead black
+    const sBot = std.smoothstep(0.3, 0.9, -rd.y);
+
+    v += s1 * 3.2 + s2 * 2.2 + sTop * 1.4 + sBot * 0.05;
+    return d.vec3f(v, v, v);
+  };
+
+  // 5-tap SDF ambient occlusion (IQ style)
+  const calcAO = (p: d.v3f, n: d.v3f): number => {
+    "use gpu";
+    let occ = d.f32(0.0);
+    let sca = d.f32(1.0);
+    for (let i = d.f32(1.0); i <= d.f32(3.0); i += d.f32(1.0)) {
+      const hr = 0.01 + 0.12 * (i / 3.0);
+      const dd = sdScene(p + n * hr);
+      occ += (hr - dd) * sca;
+      sca *= 0.65;
+    }
+    return std.clamp(1.0 - 1.6 * occ, 0.0, 1.0);
+  };
+
+  const rayMarchReflection = (ro: d.v3f, rd: d.v3f): number => {
+    "use gpu";
+    const bounds = rayBounds(ro, rd);
+    if (bounds.y < 0.0) {
+      return d.f32(100.0);
+    }
+    let t = bounds.x;
+    for (let i = d.f32(0.0); i < d.f32(24.0); i += d.f32(1.0)) {
+      const p = ro + rd * t;
+      const dist = sdScene(p);
+      t += dist;
+      if (dist < 0.001 * std.max(t, 1.0)) {
+        break;
+      }
+      if (t > bounds.y) {
+        return d.f32(100.0);
+      }
+    }
+    return t;
+  };
+
   const calcNormal = (p: d.v3f): d.v3f => {
     "use gpu";
     const eps = 0.001;
@@ -1593,15 +1742,24 @@ export function createShader(root: TgpuRoot) {
 
   const rayMarch = (ro: d.v3f, rd: d.v3f): d.v2f => {
     "use gpu";
-    let t = d.f32(0.0);
+    // Bounding-sphere gate: rays that miss the scene skip marching entirely,
+    // rays that hit start at the sphere entry instead of the camera.
+    const bounds = rayBounds(ro, rd);
+    if (bounds.y < 0.0) {
+      return d.vec2f(RAY_MISS_T + 10.0, 0.0);
+    }
+    let t = bounds.x;
     let iterations = d.f32(0.0);
     for (let i = d.f32(0.0); i < d.f32(48.0); i += d.f32(1.0)) {
       const p = ro + rd * t;
       const dist = sdScene(p);
       iterations += 1.0;
       t += dist;
-      if (dist < 0.0001 || t > 100.0) {
+      if (dist < 0.0001 * std.max(t, 1.0)) {
         break;
+      }
+      if (t > bounds.y) {
+        return d.vec2f(RAY_MISS_T + 10.0, iterations);
       }
     }
     return d.vec2f(t, iterations);
@@ -1664,13 +1822,12 @@ export function createShader(root: TgpuRoot) {
 
     const sceneResult = rayMarch(ro, rd);
     const tScene = sceneResult.x;
-    const iterations = sceneResult.y;
 
     const sceneHit = tScene <= RAY_MISS_T;
 
     let tOutline = d.f32(RAY_MISS_T + 1.0);
     if (selectionUniforms.$.enabled === d.u32(1)) {
-      tOutline = rayMarchSelectionOutline(ro, rd);
+      tOutline = rayMarchSelectionOutline(ro, rd, tScene);
     }
 
     const outlineHit = tOutline <= RAY_MISS_T;
@@ -1679,28 +1836,70 @@ export function createShader(root: TgpuRoot) {
       outlineHit &&
       (!sceneHit || tOutline < tScene - 0.0001);
 
-    let col = d.vec3f(0.05, 0.05, 0.08);
+    // Background: super-dark gray vertical gradient + vignette (sRGB direct)
+    const gradT = std.clamp(uvn.y * 0.5 + 0.5, 0.0, 1.0);
+    const bg = std.mix(
+      d.vec3f(0.055, 0.055, 0.055), // #0E0E0E bottom
+      d.vec3f(0.118, 0.118, 0.118), // #1E1E1E top
+      gradT,
+    );
+    const vig = 1.0 - 0.35 * std.dot(uvCorrected, uvCorrected) * 0.5;
+    let col = bg * std.clamp(vig, 0.0, 1.0);
 
     if (sceneHit) {
       const pos = ro + rd * tScene;
       const N = calcNormal(pos);
-      const lightDir = std.normalize(d.vec3f(2.0, 3.0, -1.0));
-      const diff = std.max(std.dot(N, lightDir), 0.0);
       const viewDir = d.vec3f(-rd.x, -rd.y, -rd.z);
-      const fresnel = std.pow(1.0 - std.abs(std.dot(N, viewDir)), 3.0) * 0.5;
-      const halfDir = std.normalize(lightDir + viewDir);
-      const spec = std.pow(std.max(std.dot(N, halfDir), 0.0), 64.0) * 1.5;
-      const ao = 1.0 - std.clamp(iterations / 64.0, 0.0, 1.0) * 0.4;
-      const baseColor = d.vec3f(0.55, 0.65, 0.95);
-      col = std.sqrt(
-        std.max(
-          (baseColor * (diff * 0.8 + 0.2) +
-            d.vec3f(1.0, 1.0, 1.0) * spec +
-            baseColor * fresnel) *
-            ao,
-          d.vec3f(0.0),
-        ),
-      );
+
+      if (sceneUniforms.$.renderMode === d.u32(RENDER_MODE_CLASSIC)) {
+        // Classic: single light, no secondary marches — cheap.
+        const iterations = sceneResult.y;
+        const lightDir = std.normalize(d.vec3f(2.0, 3.0, -1.0));
+        const diff = std.max(std.dot(N, lightDir), 0.0);
+        const fresnel = std.pow(1.0 - std.abs(std.dot(N, viewDir)), 3.0) * 0.5;
+        const halfDir = std.normalize(lightDir + viewDir);
+        const spec = std.pow(std.max(std.dot(N, halfDir), 0.0), 64.0) * 1.5;
+        const ao = 1.0 - std.clamp(iterations / 64.0, 0.0, 1.0) * 0.4;
+        const baseColor = d.vec3f(0.72, 0.72, 0.72);
+        col = std.sqrt(
+          std.max(
+            (baseColor * (diff * 0.8 + 0.2) +
+              d.vec3f(1.0, 1.0, 1.0) * spec +
+              baseColor * fresnel) *
+              ao,
+            d.vec3f(0.0),
+          ),
+        );
+      } else {
+        // Chrome: one real reflection bounce sees the scene itself.
+        const R = std.reflect(rd, N);
+        const reflRo = pos + N * 0.003;
+        const tRefl = rayMarchReflection(reflRo, R);
+        let reflCol = envColor(R);
+        if (tRefl <= RAY_MISS_T) {
+          const pRefl = reflRo + R * tRefl;
+          const nRefl = calcNormal(pRefl);
+          // ponytail: second bounce is env-only, no third march — invisible past bounce 2
+          reflCol = envColor(std.reflect(R, nRefl)) * 0.85;
+        }
+
+        const ndv = std.max(std.dot(N, viewDir), 0.0);
+        const fresnel = 0.55 + 0.45 * std.pow(1.0 - ndv, 5.0);
+
+        // Crisp key highlight for extra sparkle
+        const lightDir = std.normalize(d.vec3f(-1.5, 2.5, -2.0));
+        const halfDir = std.normalize(lightDir + viewDir);
+        const spec = std.pow(std.max(std.dot(N, halfDir), 0.0), 220.0) * 2.5;
+
+        const ao = calcAO(pos, N);
+        const hdr =
+          (reflCol * fresnel + d.vec3f(spec, spec, spec)) *
+          std.mix(0.5, 1.0, ao);
+        col = std.pow(
+          acesTonemap(hdr),
+          d.vec3f(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2),
+        );
+      }
     }
 
     if (outlineVisible) {

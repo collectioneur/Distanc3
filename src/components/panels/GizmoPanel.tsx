@@ -1,5 +1,6 @@
 import { Move, RotateCw, type LucideIcon } from "lucide-react";
 import { useGizmoStore, type GizmoMode } from "../../store/gizmoStore";
+import { useSceneStore } from "../../store/sceneStore";
 
 const MODES: { value: GizmoMode; label: string; icon: LucideIcon }[] = [
   { value: "translate", label: "Move", icon: Move },
@@ -9,10 +10,12 @@ const MODES: { value: GizmoMode; label: string; icon: LucideIcon }[] = [
 export default function GizmoPanel() {
   const mode = useGizmoStore((s) => s.mode);
   const setMode = useGizmoStore((s) => s.setMode);
+  const hasSelection = useSceneStore((s) => s.selectedItemId !== null);
+
+  if (!hasSelection) return null;
 
   return (
-    <div className="panel panel-bottom-left">
-      <span className="panel-label">Gizmo</span>
+    <div className="panel panel-bottom-center">
       <div className="top-panel-shapes">
         {MODES.map(({ value, label, icon: Icon }) => (
           <button

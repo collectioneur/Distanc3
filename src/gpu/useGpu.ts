@@ -7,10 +7,14 @@ import {
   MAX_PICK_INSTRUCTIONS,
   MAX_PICK_OBJECTS,
   OPCODE_OP,
+  OUTLINE_BAND,
+  OUTLINE_OFFSET,
   OPCODE_PUSH_SHAPE,
   OPCODE_TRANSFORM_POP,
   OPCODE_TRANSFORM_PUSH,
   PICK_PASS_GIZMO,
+  RENDER_MODE_CHROME,
+  RENDER_MODE_CLASSIC,
   SHAPE_TYPE_INT,
   OP_TYPE_INT,
 } from "./shader";
@@ -26,6 +30,7 @@ import {
   type ShapeLayer,
 } from "../store/sceneStore";
 import { useGizmoStore } from "../store/gizmoStore";
+import { useRenderStore, type RenderMode } from "../store/renderStore";
 import { clientToPickPixel, getCanvasAspect } from "./camera";
 import {
   applyWorldRotationToItem,
@@ -146,6 +151,84 @@ function pushTransformPop(out: InstructionData[]): void {
     rotation: d.vec3f(0, 0, 0),
     _pad2: 0,
   });
+}
+
+/** Conservative shape bound radius in its own local space (rotation-invariant). */
+function shapeBoundRadius(layer: ShapeLayer): number {
+  const [a, b, c] = layer.params;
+  switch (layer.shapeType) {
+    case "sphere":
+      return a;
+    case "box":
+      return Math.hypot(a, b, c);
+    case "torus":
+      return a + b;
+    case "capsule":
+      return a + b;
+    default: // cylinder, cone
+      return Math.hypot(a, b);
+  }
+}
+
+/**
+ * Conservative scene bounding-sphere radius centered at world origin.
+ * Rotations don't change norms, so |groupPos| + maxScale * childRadius is a
+ * valid upper bound without any matrix math. Smooth ops bulge outward at most
+ * k/4, folded in via maxSmoothK.
+ * ponytail: origin-centered sphere is loose for off-center scenes; upgrade
+ * path is a proper transformed AABB merge.
+ */
+function sceneBoundRadius(items: SceneItem[]): number {
+  let r = 0;
+  let maxK = 0;
+  for (const item of items) {
+    if (item.kind === "layer") {
+      const [x, y, z] = item.position;
+      r = Math.max(r, Math.hypot(x, y, z) + shapeBoundRadius(item));
+    } else {
+      const [x, y, z] = item.position;
+      const maxScale = Math.max(
+        Math.abs(item.scale[0]),
+        Math.abs(item.scale[1]),
+        Math.abs(item.scale[2]),
+      );
+      r = Math.max(
+        r,
+        Math.hypot(x, y, z) + maxScale * sceneBoundRadius(item.items),
+      );
+    }
+    maxK = Math.max(maxK, item.smoothK ?? 0);
+  }
+  return r + maxK * 0.25;
+}
+
+function maxAbsScale(group: ObjectGroup): number {
+  return Math.max(
+    Math.abs(group.scale[0]),
+    Math.abs(group.scale[1]),
+    Math.abs(group.scale[2]),
+  );
+}
+
+/**
+ * Conservative world bounding-sphere radius of the selected subtree, centered
+ * at its pivot (getGizmoWorldPosition). Rotations preserve norms, so subtree
+ * radius times ancestor max-scale product is a valid upper bound.
+ */
+function selectionBoundRadius(root: SceneRoot, itemId: string): number | null {
+  const found = findItem(root, itemId);
+  if (!found) return null;
+  const ancestors = getItemAncestorGroups(root, itemId);
+  if (!ancestors) return null;
+
+  let r =
+    found.item.kind === "layer"
+      ? shapeBoundRadius(found.item)
+      : maxAbsScale(found.item) * sceneBoundRadius(found.item.items);
+  for (const group of ancestors) {
+    r *= maxAbsScale(group);
+  }
+  return r;
 }
 
 function compileItems(items: SceneItem[], out: InstructionData[]): void {
@@ -423,6 +506,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
 
       let lastSelectedItemId: string | null = null;
       let lastRootSelected = false;
+      let lastRenderMode: RenderMode | null = null;
       let sceneGpuDirty = true;
       let pickInProgress = false;
 
@@ -1048,7 +1132,9 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       canvas.addEventListener("wheel", onWheel, { passive: false });
 
       function updateSize() {
-        const dpr = Math.min(window.devicePixelRatio ?? 1, 1.0);
+        // ponytail: DPR 1.5 = 44% fewer pixels than 2.0, still smooths edges;
+        // upgrade path is adaptive resolution scaling on frame-time budget
+        const dpr = Math.min(window.devicePixelRatio ?? 1, 1.5);
         canvas!.width = canvas!.clientWidth * dpr;
         canvas!.height = canvas!.clientHeight * dpr;
         if (canvas!.width > 0 && canvas!.height > 0) {
@@ -1082,12 +1168,19 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         sceneRoot: SceneRoot,
         selectedItemId: string | null,
         rootSelected: boolean,
+        renderMode: RenderMode,
       ) {
         const { instructions, objectInfos, objectCount } = buildGpuData(sceneRoot);
         instructionsBuffer.write(instructions);
         objectInfoBuffer.write(objectInfos);
         sceneUniforms.write({
           objectCount,
+          boundsRadius: sceneBoundRadius(sceneRoot.items) + 0.05,
+          renderMode:
+            renderMode === "classic" ? RENDER_MODE_CLASSIC : RENDER_MODE_CHROME,
+          _pad1: 0,
+          boundsCenter: d.vec3f(0, 0, 0),
+          _pad2: 0,
         });
 
         const selection = buildSelectionGpuData(
@@ -1096,10 +1189,26 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           rootSelected,
         );
         selectionInstructionsBuffer.write(selection.instructions);
+
+        // Tight outline-march gate; falls back to scene bounds (root selection).
+        let selBoundsCenter = d.vec3f(0, 0, 0);
+        let selBoundsRadius = sceneBoundRadius(sceneRoot.items) + 0.05;
+        if (selection.enabled && !selection.usesSceneSdf && selectedItemId) {
+          const center = getGizmoWorldPosition(sceneRoot, selectedItemId);
+          const radius = selectionBoundRadius(sceneRoot, selectedItemId);
+          if (center && radius !== null) {
+            selBoundsCenter = d.vec3f(center[0], center[1], center[2]);
+            selBoundsRadius = radius + OUTLINE_OFFSET + OUTLINE_BAND + 0.02;
+          }
+        }
+
         selectionUniforms.write({
           enabled: selection.enabled ? 1 : 0,
           usesSceneSdf: selection.usesSceneSdf ? 1 : 0,
           count: selection.count,
+          boundsRadius: selBoundsRadius,
+          boundsCenter: selBoundsCenter,
+          _pad: 0,
         });
 
         const pick = buildPickGpuData(sceneRoot);
@@ -1118,10 +1227,12 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         initialState.root,
         initialState.selectedItemId,
         initialState.rootSelected,
+        useRenderStore.getState().renderMode,
       );
       lastRoot = initialState.root;
       lastSelectedItemId = initialState.selectedItemId;
       lastRootSelected = initialState.rootSelected;
+      lastRenderMode = useRenderStore.getState().renderMode;
 
       function frame(now: number) {
         if (pickInProgress) {
@@ -1137,17 +1248,20 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
 
         const { root: sceneRoot, selectedItemId, rootSelected } =
           useSceneStore.getState();
+        const renderMode = useRenderStore.getState().renderMode;
         if (
           sceneGpuDirty ||
           sceneRoot !== lastRoot ||
           selectedItemId !== lastSelectedItemId ||
-          rootSelected !== lastRootSelected
+          rootSelected !== lastRootSelected ||
+          renderMode !== lastRenderMode
         ) {
-          uploadSceneGpu(sceneRoot, selectedItemId, rootSelected);
+          uploadSceneGpu(sceneRoot, selectedItemId, rootSelected, renderMode);
 
           lastRoot = sceneRoot;
           lastSelectedItemId = selectedItemId;
           lastRootSelected = rootSelected;
+          lastRenderMode = renderMode;
           sceneGpuDirty = false;
         }
 

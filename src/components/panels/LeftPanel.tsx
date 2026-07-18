@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Tree, type DragPreviewProps, type NodeRendererProps } from "react-arborist";
 import { useTreeApi } from "react-arborist/dist/module/context.js";
@@ -229,7 +229,27 @@ function SceneRootHeader({
 export default function LeftPanel() {
   const [sceneCollapsed, setSceneCollapsed] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const { width, height } = useElementSize(listRef);
+
+  useLayoutEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+
+    const rootStyle = document.documentElement.style;
+    const measure = () => {
+      rootStyle.setProperty("--scene-panel-height", `${el.getBoundingClientRect().height}px`);
+    };
+
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
 
   const root = useSceneStore((s) => s.root);
   const selectedItemId = useSceneStore((s) => s.selectedItemId);
@@ -272,7 +292,7 @@ export default function LeftPanel() {
   }
 
   return (
-    <div className="panel panel-left">
+    <div className="panel panel-left" ref={panelRef}>
       <div className="panel-header">Scene</div>
       <SceneRootHeader
         collapsed={sceneCollapsed}
@@ -282,11 +302,11 @@ export default function LeftPanel() {
         {!sceneCollapsed && root.items.length === 0 && (
           <p className="scene-object-empty">Empty — add a shape from the top bar.</p>
         )}
-        {!sceneCollapsed && root.items.length > 0 && width > 0 && height > 0 && (
+        {!sceneCollapsed && root.items.length > 0 && (
           <Tree<ArboristNode>
             data={arboristData}
-            width={width}
-            height={height}
+            width={Math.max(width, 1)}
+            height={Math.max(height, 1)}
             indent={12}
             rowHeight={32}
             openByDefault
