@@ -33,15 +33,19 @@ import { useGizmoStore } from "../store/gizmoStore";
 import { useRenderStore, type RenderMode } from "../store/renderStore";
 import { clientToPickPixel, getCanvasAspect } from "./camera";
 import {
+  applyScaleFactorToItem,
   applyWorldRotationToItem,
   axisDeltaFromScreenDrag,
   beginAxisScreenDrag,
   beginRingDrag,
+  beginScaleDrag,
   getGizmoWorldAxes,
   ringTotalAngleFromScreenDrag,
+  scaleFactorFromScreenDrag,
   getGizmoWorldPosition,
   getItemAncestorGroups,
   GIZMO_MODE_ROTATE,
+  GIZMO_MODE_SCALE,
   GIZMO_MODE_TRANSLATE,
   GIZMO_ARROW_LENGTH_RATIO,
   gizmoVisualScaleForDistance,
@@ -52,11 +56,13 @@ import {
   worldToItemLocalPosition,
   type AxisScreenDragState,
   type GizmoAxis,
+  type GizmoHandle,
   type RingDragState,
+  type ScaleDragState,
 } from "./gizmo";
 
 type GizmoGpuPickResult = {
-  axis: GizmoAxis | null;
+  axis: GizmoHandle | null;
   skipped: boolean;
 };
 
@@ -70,6 +76,8 @@ type InstructionData = {
   params: ReturnType<typeof d.vec4f>;
   rotation: ReturnType<typeof d.vec3f>;
   _pad2: number;
+  scale: ReturnType<typeof d.vec3f>;
+  _pad3: number;
 };
 
 type ObjectInfoData = { start: number; count: number };
@@ -84,6 +92,8 @@ const EMPTY_INSTRUCTION: InstructionData = {
   params: d.vec4f(0, 0, 0, 0),
   rotation: d.vec3f(0, 0, 0),
   _pad2: 0,
+  scale: d.vec3f(1, 1, 1),
+  _pad3: 0,
 };
 
 const EMPTY_OBJECT_INFO: ObjectInfoData = { start: 0, count: 0 };
@@ -107,6 +117,8 @@ function pushShapeInstruction(layer: ShapeLayer, out: InstructionData[]): void {
     ),
     rotation: d.vec3f(rx * DEG_TO_RAD, ry * DEG_TO_RAD, rz * DEG_TO_RAD),
     _pad2: 0,
+    scale: d.vec3f(layer.scale[0], layer.scale[1], layer.scale[2]),
+    _pad3: 0,
   });
 }
 
@@ -121,6 +133,8 @@ function pushOpInstruction(op: OpType, smoothK: number, out: InstructionData[]):
     params: d.vec4f(0, 0, 0, 0),
     rotation: d.vec3f(0, 0, 0),
     _pad2: 0,
+    scale: d.vec3f(1, 1, 1),
+    _pad3: 0,
   });
 }
 
@@ -136,6 +150,8 @@ function pushTransformPush(group: ObjectGroup, out: InstructionData[]): void {
     params: d.vec4f(group.scale[0], group.scale[1], group.scale[2], 0),
     rotation: d.vec3f(rx * DEG_TO_RAD, ry * DEG_TO_RAD, rz * DEG_TO_RAD),
     _pad2: 0,
+    scale: d.vec3f(1, 1, 1),
+    _pad3: 0,
   });
 }
 
@@ -150,23 +166,30 @@ function pushTransformPop(out: InstructionData[]): void {
     params: d.vec4f(0, 0, 0, 0),
     rotation: d.vec3f(0, 0, 0),
     _pad2: 0,
+    scale: d.vec3f(1, 1, 1),
+    _pad3: 0,
   });
 }
 
 /** Conservative shape bound radius in its own local space (rotation-invariant). */
 function shapeBoundRadius(layer: ShapeLayer): number {
   const [a, b, c] = layer.params;
+  const maxScale = Math.max(
+    Math.abs(layer.scale[0]),
+    Math.abs(layer.scale[1]),
+    Math.abs(layer.scale[2]),
+  );
   switch (layer.shapeType) {
     case "sphere":
-      return a;
+      return a * maxScale;
     case "box":
-      return Math.hypot(a, b, c);
+      return Math.hypot(a, b, c) * maxScale;
     case "torus":
-      return a + b;
+      return (a + b) * maxScale;
     case "capsule":
-      return a + b;
+      return (a + b) * maxScale;
     default: // cylinder, cone
-      return Math.hypot(a, b);
+      return Math.hypot(a, b) * maxScale;
   }
 }
 
@@ -404,13 +427,14 @@ const GIZMO_AXIS_DIR: Record<GizmoAxis, [number, number, number]> = {
   z: [0, 0, 1],
 };
 
-const GIZMO_AXIS_ID: Record<GizmoAxis, number> = {
+const GIZMO_AXIS_ID: Record<GizmoHandle, number> = {
   x: 1,
   y: 2,
   z: 3,
+  c: 4,
 };
 
-function axisIdToCursor(axis: GizmoAxis | null): string {
+function axisIdToCursor(axis: GizmoHandle | null): string {
   if (!axis) return "default";
   if (axis === "x") return "ew-resize";
   if (axis === "y") return "ns-resize";
@@ -421,13 +445,14 @@ function readPickIdFromBytes(data: Uint8Array): number {
   return Math.max(data[0] ?? 0, data[1] ?? 0, data[2] ?? 0);
 }
 
-const PICK_AXIS_ID: Record<number, GizmoAxis> = {
+const PICK_AXIS_ID: Record<number, GizmoHandle> = {
   1: "x",
   2: "y",
   3: "z",
+  4: "c",
 };
 
-function axisFromPickByte(pickId: number): GizmoAxis | null {
+function axisFromPickByte(pickId: number): GizmoHandle | null {
   return PICK_AXIS_ID[pickId] ?? null;
 }
 
@@ -511,11 +536,12 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       let pickInProgress = false;
 
       let gizmoDragging = false;
-      let gizmoHoverAxis: GizmoAxis | null = null;
-      let gizmoDragAxis: GizmoAxis | null = null;
+      let gizmoHoverAxis: GizmoHandle | null = null;
+      let gizmoDragAxis: GizmoHandle | null = null;
       let gizmoDragStartWorld: [number, number, number] | null = null;
       let gizmoDragScreen: AxisScreenDragState | null = null;
       let gizmoDragRing: RingDragState | null = null;
+      let gizmoDragScale: ScaleDragState | null = null;
       let gizmoDragItemId: string | null = null;
       let gizmoDragAncestors: ObjectGroup[] | null = null;
       let cachedPickObjectCount = 0;
@@ -530,13 +556,14 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
 
       function isGizmoVisibleMode(): boolean {
         const mode = useGizmoStore.getState().mode;
-        return mode === "translate" || mode === "rotate";
+        return mode === "translate" || mode === "rotate" || mode === "scale";
       }
 
       function gizmoModeUniform(): number {
-        return useGizmoStore.getState().mode === "rotate"
-          ? GIZMO_MODE_ROTATE
-          : GIZMO_MODE_TRANSLATE;
+        const mode = useGizmoStore.getState().mode;
+        if (mode === "rotate") return GIZMO_MODE_ROTATE;
+        if (mode === "scale") return GIZMO_MODE_SCALE;
+        return GIZMO_MODE_TRANSLATE;
       }
 
       function gizmoPickMode(): GizmoPickMode {
@@ -573,7 +600,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         sceneRoot: SceneRoot,
         selectedItemId: string | null,
         cameraDistance: number,
-        activeAxis: GizmoAxis | null,
+        activeAxis: GizmoHandle | null,
       ) {
         if (!isGizmoVisibleMode() || !selectedItemId) {
           writeGizmoDisabled();
@@ -720,10 +747,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
             }
 
             const mode = gizmoPickMode();
-            const axes =
-              mode === "rotate"
-                ? getGizmoWorldAxes(sceneRoot, selectedItemId)
-                : null;
+            const axes = getGizmoWorldAxes(sceneRoot, selectedItemId);
             const [rx, ry] = getCameraRot();
             const gizmoScale = gizmoVisualScaleForDistance(distance);
 
@@ -781,14 +805,11 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         if (!pivotWorld || ancestors === null) return false;
 
         const mode = gizmoPickMode();
-        const axes =
-          mode === "rotate"
-            ? getGizmoWorldAxes(sceneRoot, selectedItemId)
-            : null;
+        const axes = getGizmoWorldAxes(sceneRoot, selectedItemId);
         const [rx, ry] = getCameraRot();
         const gizmoScale = gizmoVisualScaleForDistance(distance);
 
-        let axis: GizmoAxis | null = null;
+        let axis: GizmoHandle | null = null;
 
         if (
           gizmoHoverAxis &&
@@ -840,6 +861,40 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         }
         if (!axis) return false;
 
+        if (mode === "scale") {
+          if (!axes) return false;
+          const scaleDrag = beginScaleDrag(
+            clientX,
+            clientY,
+            canvas!,
+            rx,
+            ry,
+            distance,
+            pivotWorld,
+            axis,
+            axes,
+            gizmoScale,
+            found.item.scale,
+          );
+          if (!scaleDrag) return false;
+
+          gizmoDragging = true;
+          gizmoDragAxis = axis;
+          gizmoDragItemId = selectedItemId;
+          gizmoDragAncestors = ancestors;
+          gizmoDragStartWorld = pivotWorld;
+          gizmoDragScreen = null;
+          gizmoDragRing = null;
+          gizmoDragScale = scaleDrag;
+          gizmoHoverAxis = axis;
+          temporalStore.getState().pause();
+          canvas!.style.cursor = axisIdToCursor(axis);
+          return true;
+        }
+
+        // Center handle exists only on the scale gizmo.
+        if (axis === "c") return false;
+
         if (mode === "rotate") {
           if (!axes) return false;
           const worldAxis = axes[axis];
@@ -864,6 +919,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           gizmoDragStartWorld = pivotWorld;
           gizmoDragScreen = null;
           gizmoDragRing = ringDrag;
+          gizmoDragScale = null;
           gizmoHoverAxis = axis;
           temporalStore.getState().pause();
           canvas!.style.cursor = "grabbing";
@@ -891,6 +947,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         gizmoDragStartWorld = pivotWorld;
         gizmoDragScreen = dragScreen;
         gizmoDragRing = null;
+        gizmoDragScale = null;
         gizmoHoverAxis = axis;
         temporalStore.getState().pause();
         canvas!.style.cursor = axisIdToCursor(axis);
@@ -903,6 +960,21 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         }
 
         const [rx, ry] = getCameraRot();
+
+        if (gizmoDragScale) {
+          const factor = scaleFactorFromScreenDrag(
+            clientX,
+            clientY,
+            gizmoDragScale,
+          );
+          applyScaleFactorToItem(
+            useSceneStore.getState().root,
+            gizmoDragItemId,
+            gizmoDragScale,
+            factor,
+          );
+          return;
+        }
 
         if (gizmoDragRing) {
           const totalAngle = ringTotalAngleFromScreenDrag(
@@ -928,7 +1000,8 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         if (
           !gizmoDragStartWorld ||
           !gizmoDragScreen ||
-          !gizmoDragAncestors
+          !gizmoDragAncestors ||
+          gizmoDragAxis === "c"
         ) {
           return;
         }
@@ -960,6 +1033,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         gizmoDragStartWorld = null;
         gizmoDragScreen = null;
         gizmoDragRing = null;
+        gizmoDragScale = null;
         gizmoDragItemId = null;
         gizmoDragAncestors = null;
         temporalStore.getState().resume();

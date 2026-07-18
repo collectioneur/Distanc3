@@ -1,10 +1,11 @@
-import { Move, RotateCw, type LucideIcon } from "lucide-react";
+import { Move, RotateCw, Scaling, type LucideIcon } from "lucide-react";
 import { useGizmoStore, type GizmoMode } from "../../store/gizmoStore";
 import { useSceneStore } from "../../store/sceneStore";
 
 const MODES: { value: GizmoMode; label: string; icon: LucideIcon }[] = [
   { value: "translate", label: "Move", icon: Move },
   { value: "rotate", label: "Rotate", icon: RotateCw },
+  { value: "scale", label: "Scale", icon: Scaling },
 ];
 
 export default function GizmoPanel() {

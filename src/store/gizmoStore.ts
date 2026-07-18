@@ -1,13 +1,13 @@
 import { create } from "zustand";
 
-export type GizmoMode = "translate" | "rotate";
+export type GizmoMode = "translate" | "rotate" | "scale";
 
 const LS_KEY = "distanc3-gizmo-mode";
 
 function loadMode(): GizmoMode {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (raw === "translate" || raw === "rotate") return raw;
+    if (raw === "translate" || raw === "rotate" || raw === "scale") return raw;
   } catch {
     /* ignore */
   }

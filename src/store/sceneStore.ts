@@ -16,6 +16,7 @@ export type ShapeLayer = {
   name: string;
   position: [number, number, number];
   rotation: [number, number, number]; // Euler XYZ in degrees
+  scale: [number, number, number]; // local scale applied after own rotation
   params: [number, number, number, number];
   op: OpType; // ignored when index 0 in parent items
   smoothK: number;
@@ -296,7 +297,10 @@ interface SceneState {
     containerId: string,
     layerId: string,
     patch: Partial<
-      Pick<ShapeLayer, "name" | "position" | "rotation" | "params" | "op" | "smoothK">
+      Pick<
+        ShapeLayer,
+        "name" | "position" | "rotation" | "scale" | "params" | "op" | "smoothK"
+      >
     >,
   ) => void;
   moveItems: (dragIds: string[], parentId: string | null, index: number) => boolean;
@@ -349,6 +353,7 @@ export const useSceneStore = create<SceneState>()(
           name: `${TYPE_LABEL[shapeType]} ${count}`,
           position: [0, 0, 0],
           rotation: [0, 0, 0],
+          scale: [1, 1, 1],
           params: [...DEFAULT_PARAMS[shapeType]],
           op: "union",
           smoothK: 0.1,
@@ -430,6 +435,7 @@ export const useSceneStore = create<SceneState>()(
           const normalized = { ...patch };
           if (normalized.position) normalized.position = roundVec3(normalized.position);
           if (normalized.rotation) normalized.rotation = roundVec3(normalized.rotation);
+          if (normalized.scale) normalized.scale = roundVec3(normalized.scale);
           if (normalized.params) normalized.params = roundLayerParams(normalized.params);
           return {
             root: mapRootContainer(state.root, containerId, (items) =>
@@ -445,6 +451,7 @@ export const useSceneStore = create<SceneState>()(
           const normalized = { ...patch };
           if (normalized.position) normalized.position = roundVec3(normalized.position);
           if (normalized.rotation) normalized.rotation = roundVec3(normalized.rotation);
+          if (normalized.scale) normalized.scale = roundVec3(normalized.scale);
           return {
             root: mapRootItem(state.root, groupId, (item) =>
               item.kind === "group" ? { ...item, ...normalized } : item,

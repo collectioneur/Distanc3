@@ -42,7 +42,7 @@ export const OP_TYPE_INT = {
 } as const;
 
 // Each instruction is PUSH_SHAPE (0), OP (1), TRANSFORM_PUSH (2), or TRANSFORM_POP (3).
-// Layout: 4×u32/f32 header (16 bytes) + vec3f+pad (16 bytes) + vec4f (16 bytes) + vec3f+pad (16 bytes) = 64 bytes
+// Layout: 4×u32/f32 header (16 bytes) + 3×(vec3f/vec4f + pad) (48 bytes) + vec3f+pad (16 bytes) = 80 bytes
 const Instruction = d.struct({
   opcode: d.u32, // 0=PUSH_SHAPE, 1=OP, 2=TRANSFORM_PUSH, 3=TRANSFORM_POP
   shapeType: d.u32, // for PUSH_SHAPE: 0-5
@@ -53,6 +53,8 @@ const Instruction = d.struct({
   params: d.vec4f, // for PUSH_SHAPE shape params; TRANSFORM_PUSH scale in xyz
   rotation: d.vec3f, // for PUSH_SHAPE / TRANSFORM_PUSH: Euler XYZ in radians
   _pad2: d.f32, // alignment padding after vec3f
+  scale: d.vec3f, // for PUSH_SHAPE: layer local scale (applied after own rotation)
+  _pad3: d.f32, // alignment padding after vec3f
 });
 
 const ObjectInfo = d.struct({
@@ -118,6 +120,8 @@ const emptyInstruction = {
   params: d.vec4f(0, 0, 0, 0),
   rotation: d.vec3f(0, 0, 0),
   _pad2: 0,
+  scale: d.vec3f(1, 1, 1),
+  _pad3: 0,
 };
 
 const emptyObjectInfo = { start: 0, count: 0 };
@@ -348,6 +352,21 @@ export function createShader(root: TgpuRoot) {
     return result;
   };
 
+  // Layer local scale: forward is R_layer · (S_layer · local), so the inverse
+  // divides by scale after the rotation is undone. Multiplying the result by
+  // min(scale) keeps the distance a conservative lower bound under
+  // non-uniform scale (same trick as the group transform stack).
+  const evalScaledShape = (
+    lp: d.v3f,
+    shapeType: d.u32,
+    params: d.v4f,
+    scale: d.v3f,
+  ): number => {
+    "use gpu";
+    const q = d.vec3f(lp.x / scale.x, lp.y / scale.y, lp.z / scale.z);
+    return evalShape(q, shapeType, params) * minVec3(scale);
+  };
+
   // Polynomial smooth-min (IQ)
   const smin = (a: number, b: number, k: number): number => {
     "use gpu";
@@ -510,7 +529,7 @@ export function createShader(root: TgpuRoot) {
             instr.rotation,
             accScl,
           );
-          let val = evalShape(lp, instr.shapeType, instr.params);
+          let val = evalScaledShape(lp, instr.shapeType, instr.params, instr.scale);
           val = val * minVec3(accScl);
           if (sp === d.u32(0)) s0 = val;
           else if (sp === d.u32(1)) s1 = val;
@@ -921,7 +940,7 @@ export function createShader(root: TgpuRoot) {
           instr.rotation,
           accScl,
         );
-        let val = evalShape(lp, instr.shapeType, instr.params);
+        let val = evalScaledShape(lp, instr.shapeType, instr.params, instr.scale);
         val = val * minVec3(accScl);
         if (sp === d.u32(0)) s0 = val;
         else if (sp === d.u32(1)) s1 = val;
@@ -1228,7 +1247,7 @@ export function createShader(root: TgpuRoot) {
           instr.rotation,
           accScl,
         );
-        let val = evalShape(lp, instr.shapeType, instr.params);
+        let val = evalScaledShape(lp, instr.shapeType, instr.params, instr.scale);
         val = val * minVec3(accScl);
         if (sp === d.u32(0)) s0 = val;
         else if (sp === d.u32(1)) s1 = val;
@@ -1522,6 +1541,10 @@ export function createShader(root: TgpuRoot) {
   const GIZMO_RING_MAJOR = 0.85;
   const GIZMO_RING_TUBE = 0.035;
   const GIZMO_MODE_ROTATE = 1;
+  const GIZMO_MODE_SCALE = 2;
+  /** Must match gizmo.ts GIZMO_SCALE_HEAD_HALF_RATIO / GIZMO_CENTER_HALF_RATIO. */
+  const GIZMO_SCALE_HEAD_HALF = 0.07;
+  const GIZMO_CENTER_HALF = 0.055;
 
   const sdCapsuleSeg = (p: d.v3f, a: d.v3f, b: d.v3f, r: number): number => {
     "use gpu";
@@ -1596,10 +1619,64 @@ export function createShader(root: TgpuRoot) {
     return d.vec2f(best, axis);
   };
 
+  // Arrow with a cube head (scale-gizmo convention, distinct from the
+  // translate arrows). Cube is oriented along the handle axis; the u/v basis
+  // must match gizmo.ts ringPlaneBasis so CPU pick sees identical geometry.
+  const sdScaleHandle = (gp: d.v3f, axis: d.v3f, s: number): number => {
+    "use gpu";
+    const arrowLen = s * GIZMO_ARROW_LEN;
+    const shaftR = s * GIZMO_SHAFT_R;
+    const half = s * GIZMO_SCALE_HEAD_HALF;
+
+    let hint = d.vec3f(0.0, 1.0, 0.0);
+    if (std.abs(axis.y) >= 0.9) {
+      hint = d.vec3f(1.0, 0.0, 0.0);
+    }
+    const u = std.normalize(std.cross(hint, axis));
+    const v = std.cross(axis, u);
+
+    const dShaft = sdCapsuleSeg(gp, d.vec3f(0.0), axis * (arrowLen - half), shaftR);
+
+    const rel = gp - axis * arrowLen;
+    const local = d.vec3f(std.dot(rel, axis), std.dot(rel, u), std.dot(rel, v));
+    const dHead = sdBox(local, d.vec3f(half, half, half));
+    return std.min(dShaft, dHead);
+  };
+
+  const evalScaleGizmo = (p: d.v3f): d.v2f => {
+    "use gpu";
+    const origin = gizmoUniforms.$.position;
+    const s = gizmoUniforms.$.scale;
+    const gp = p - origin;
+    const dx = sdScaleHandle(gp, gizmoUniforms.$.axisX, s);
+    const dy = sdScaleHandle(gp, gizmoUniforms.$.axisY, s);
+    const dz = sdScaleHandle(gp, gizmoUniforms.$.axisZ, s);
+    const half = s * GIZMO_CENTER_HALF;
+    const dc = sdBox(gp, d.vec3f(half, half, half));
+    let best = dx;
+    let axis = d.f32(1.0);
+    if (dy < best) {
+      best = dy;
+      axis = d.f32(2.0);
+    }
+    if (dz < best) {
+      best = dz;
+      axis = d.f32(3.0);
+    }
+    if (dc < best) {
+      best = dc;
+      axis = d.f32(4.0);
+    }
+    return d.vec2f(best, axis);
+  };
+
   const evalGizmo = (p: d.v3f): d.v2f => {
     "use gpu";
     if (gizmoUniforms.$.mode === d.u32(GIZMO_MODE_ROTATE)) {
       return evalRotateGizmo(p);
+    }
+    if (gizmoUniforms.$.mode === d.u32(GIZMO_MODE_SCALE)) {
+      return evalScaleGizmo(p);
     }
     return evalTranslateGizmo(p);
   };
@@ -1611,7 +1688,8 @@ export function createShader(root: TgpuRoot) {
     const isActive =
       (active === d.u32(1) && axisId === d.u32(1)) ||
       (active === d.u32(2) && axisId === d.u32(2)) ||
-      (active === d.u32(3) && axisId === d.u32(3));
+      (active === d.u32(3) && axisId === d.u32(3)) ||
+      (active === d.u32(4) && axisId === d.u32(4));
     let boost = d.f32(1.0);
     if (isActive) {
       boost = d.f32(1.35);
@@ -1621,6 +1699,9 @@ export function createShader(root: TgpuRoot) {
     }
     if (axisId === d.u32(2)) {
       return d.vec3f(0.28, 1.0, 0.28) * boost;
+    }
+    if (axisId === d.u32(4)) {
+      return d.vec3f(0.85, 0.85, 0.85) * boost;
     }
     return d.vec3f(0.35, 0.55, 1.0) * boost;
   };

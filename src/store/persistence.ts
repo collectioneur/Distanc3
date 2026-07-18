@@ -12,6 +12,32 @@ export type PersistedScene = {
   groupCounter: number;
 };
 
+/**
+ * Additive migration: layers persisted before the scale feature lack the
+ * `scale` field. Fill defaults and sanitize (trust boundary — hash/LS data is
+ * user-editable; a zero component would divide by zero in the shader).
+ */
+function normalizePersisted(s: PersistedScene): PersistedScene {
+  const fixItems = (items: { kind: string; scale?: unknown; items?: unknown }[]) => {
+    for (const item of items) {
+      const valid =
+        Array.isArray(item.scale) &&
+        item.scale.length === 3 &&
+        item.scale.every((n) => typeof n === "number" && Number.isFinite(n));
+      if (!valid) {
+        item.scale = [1, 1, 1];
+      } else {
+        item.scale = (item.scale as number[]).map((n) => Math.max(0.01, Math.abs(n)));
+      }
+      if (item.kind === "group" && Array.isArray(item.items)) {
+        fixItems(item.items as { kind: string }[]);
+      }
+    }
+  };
+  if (Array.isArray(s.root?.items)) fixItems(s.root.items);
+  return s;
+}
+
 export function encodeHash(s: PersistedScene): string {
   const json = JSON.stringify(s);
   const bytes = new TextEncoder().encode(json);
@@ -27,7 +53,7 @@ function decodeHash(raw: string): PersistedScene | null {
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     const parsed = JSON.parse(new TextDecoder().decode(bytes));
     if (parsed?.v !== SCHEMA_VERSION) return null;
-    return parsed as PersistedScene;
+    return normalizePersisted(parsed as PersistedScene);
   } catch {
     return null;
   }
@@ -38,7 +64,7 @@ function loadFromStorage(): PersistedScene | null {
     const raw = localStorage.getItem(LS_KEY);
     if (raw) {
       const fromLS = JSON.parse(raw) as PersistedScene;
-      if (fromLS?.v === SCHEMA_VERSION) return fromLS;
+      if (fromLS?.v === SCHEMA_VERSION) return normalizePersisted(fromLS);
     }
   } catch {
     // ignore

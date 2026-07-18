@@ -266,6 +266,12 @@ function LayerProperties({
     updateLayer(containerId, layer.id, { params });
   };
 
+  const setScale = (axis: 0 | 1 | 2, v: number) => {
+    const scale: [number, number, number] = [...layer.scale];
+    scale[axis] = v;
+    updateLayer(containerId, layer.id, { scale });
+  };
+
   const sizeFields = SIZE_FIELDS[layer.shapeType] ?? [];
   const showOp = itemIndex > 0;
 
@@ -290,6 +296,11 @@ function LayerProperties({
       <NumericInput label="Rx" value={layer.rotation[0]} step={1} decimals={2} onChange={(v) => setRotation(0, v)} />
       <NumericInput label="Ry" value={layer.rotation[1]} step={1} decimals={2} onChange={(v) => setRotation(1, v)} />
       <NumericInput label="Rz" value={layer.rotation[2]} step={1} decimals={2} onChange={(v) => setRotation(2, v)} />
+
+      <div className="props-section-title" style={{ marginTop: "16px" }}>Scale</div>
+      <NumericInput label="Sx" value={layer.scale[0]} min={0.01} step={0.1} decimals={2} onChange={(v) => setScale(0, v)} />
+      <NumericInput label="Sy" value={layer.scale[1]} min={0.01} step={0.1} decimals={2} onChange={(v) => setScale(1, v)} />
+      <NumericInput label="Sz" value={layer.scale[2]} min={0.01} step={0.1} decimals={2} onChange={(v) => setScale(2, v)} />
 
       <div className="props-section-title" style={{ marginTop: "16px" }}>Size</div>
       {sizeFields.map((f) => (

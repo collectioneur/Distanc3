@@ -12,8 +12,11 @@ import {
   type CameraRay,
   type Vec3,
 } from "./camera";
+import { applyFactorToScale, scaleFactorFromAxisDelta } from "../utils/scale";
 
 export type GizmoAxis = "x" | "y" | "z";
+/** Pickable gizmo part: an axis or the scale-gizmo center (uniform) handle. */
+export type GizmoHandle = GizmoAxis | "c";
 
 export const GIZMO_SCALE_FACTOR = 0.15;
 /** Floor for projected axis length (px) — stabilizes foreshortened Z drag speed. */
@@ -150,9 +153,13 @@ export function getGizmoWorldPosition(root: SceneRoot, itemId: string): Vec3 | n
 
 export const GIZMO_MODE_TRANSLATE = 0;
 export const GIZMO_MODE_ROTATE = 1;
+export const GIZMO_MODE_SCALE = 2;
 
 export const GIZMO_RING_MAJOR_RATIO = 0.85;
 export const GIZMO_RING_TUBE_RATIO = 0.035;
+/** Must match shader GIZMO_SCALE_HEAD_HALF / GIZMO_CENTER_HALF. */
+export const GIZMO_SCALE_HEAD_HALF_RATIO = 0.07;
+export const GIZMO_CENTER_HALF_RATIO = 0.055;
 /**
  * Edge-on rings project to a long screen line; screen pick falsely hits far
  * outside the visible torus below this alignment with the view ray.
@@ -160,7 +167,7 @@ export const GIZMO_RING_TUBE_RATIO = 0.035;
 const RING_SCREEN_PICK_FACE_ON_MIN = 0.35;
 
 export type GizmoWorldAxes = { x: Vec3; y: Vec3; z: Vec3 };
-export type GizmoPickMode = "translate" | "rotate";
+export type GizmoPickMode = "translate" | "rotate" | "scale";
 
 const RING_SCREEN_SEGMENTS = 32;
 
@@ -356,6 +363,76 @@ export function hitTestTranslateGizmo(
   }
 
   return bestAxis;
+}
+
+function sdBox3(p: Vec3, half: number): number {
+  const qx = Math.abs(p[0]) - half;
+  const qy = Math.abs(p[1]) - half;
+  const qz = Math.abs(p[2]) - half;
+  return (
+    Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) +
+    Math.min(Math.max(qx, Math.max(qy, qz)), 0)
+  );
+}
+
+/** Same geometry as shader sdScaleHandle: shaft capsule + cube head at the tip. */
+function scaleHandleDistance(gp: Vec3, axis: Vec3, gizmoScale: number): number {
+  const arrowLen = gizmoScale * GIZMO_ARROW_LENGTH_RATIO;
+  const shaftR = gizmoScale * GIZMO_SHAFT_RADIUS_RATIO;
+  const half = gizmoScale * GIZMO_SCALE_HEAD_HALF_RATIO;
+
+  const basis = ringPlaneBasis(axis);
+  if (!basis) return Infinity;
+  const [u, v] = basis;
+
+  const dShaft = sdCapsuleSeg(
+    gp,
+    [0, 0, 0],
+    scaleVec(axis, arrowLen - half),
+    shaftR,
+  );
+  const rel = sub(gp, scaleVec(axis, arrowLen));
+  const local: Vec3 = [dot(rel, axis), dot(rel, u), dot(rel, v)];
+  return Math.min(dShaft, sdBox3(local, half));
+}
+
+/** 3D SDF pick — same geometry + hit epsilon as shader evalScaleGizmo. */
+export function hitTestScaleGizmo(
+  ray: CameraRay,
+  gizmoPos: Vec3,
+  gizmoScale: number,
+  axes: GizmoWorldAxes,
+): GizmoHandle | null {
+  const hitEps = GIZMO_HIT_EPS;
+  const centerHalf = gizmoScale * GIZMO_CENTER_HALF_RATIO;
+
+  const handleDist = (gp: Vec3, handle: GizmoHandle): number =>
+    handle === "c"
+      ? sdBox3(gp, centerHalf)
+      : scaleHandleDistance(gp, axes[handle], gizmoScale);
+
+  let t = 0;
+  for (let i = 0; i < 64; i++) {
+    const p = add(ray.origin, scaleVec(ray.direction, t));
+    const gp = sub(p, gizmoPos);
+
+    let minD = Infinity;
+    let hit: GizmoHandle | null = null;
+    let hitD = Infinity;
+    for (const handle of ["c", "x", "y", "z"] as const) {
+      const dist = handleDist(gp, handle);
+      if (dist < hitEps && dist < hitD) {
+        hitD = dist;
+        hit = handle;
+      }
+      if (dist < minD) minD = dist;
+    }
+    if (hit) return hit;
+
+    t += Math.max(minD * 0.85, 0.0005);
+    if (t > 100) break;
+  }
+  return null;
 }
 
 function worldAxisRingDistance(
@@ -554,6 +631,67 @@ export function hitTestRotateGizmoScreen(
   return hitTestRotateGizmo(ray, gizmoPos, gizmoScale, axes);
 }
 
+/** 3D pick first; screen fallback: axis segments (local axes) + center point. */
+export function hitTestScaleGizmoScreen(
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  gizmoPos: Vec3,
+  gizmoScale: number,
+  axes: GizmoWorldAxes,
+): GizmoHandle | null {
+  const ray = computeCameraRayFromClient(
+    clientX,
+    clientY,
+    canvas,
+    rotX,
+    rotY,
+    distance,
+  );
+  if (!ray) return null;
+
+  const pick3d = hitTestScaleGizmo(ray, gizmoPos, gizmoScale, axes);
+  if (pick3d) return pick3d;
+
+  const origin = worldToClient(gizmoPos, canvas, rotX, rotY, distance);
+  if (!origin) return null;
+
+  let bestHandle: GizmoHandle | null = null;
+  let bestDist = Infinity;
+
+  const dCenter = Math.hypot(clientX - origin.x, clientY - origin.y);
+  if (dCenter < GIZMO_PICK_PIXELS_HEAD) {
+    bestHandle = "c";
+    bestDist = dCenter;
+  }
+
+  for (const axis of ["x", "y", "z"] as const) {
+    const seg = axisScreenSegmentPick(
+      clientX,
+      clientY,
+      axes[axis],
+      canvas,
+      rotX,
+      rotY,
+      distance,
+      gizmoPos,
+      gizmoScale,
+    );
+    if (!seg) continue;
+    const pickRadius = seg.onHead
+      ? GIZMO_PICK_PIXELS_HEAD
+      : GIZMO_PICK_PIXELS_SHAFT;
+    if (seg.dist >= pickRadius || seg.dist >= bestDist) continue;
+    bestDist = seg.dist;
+    bestHandle = axis;
+  }
+
+  return bestHandle;
+}
+
 /** Mode-aware 3D + screen pick. */
 export function hitTestGizmoScreen(
   mode: GizmoPickMode,
@@ -566,10 +704,24 @@ export function hitTestGizmoScreen(
   gizmoPos: Vec3,
   gizmoScale: number,
   axes: GizmoWorldAxes | null,
-): GizmoAxis | null {
+): GizmoHandle | null {
   if (mode === "rotate") {
     if (!axes) return null;
     return hitTestRotateGizmoScreen(
+      clientX,
+      clientY,
+      canvas,
+      rotX,
+      rotY,
+      distance,
+      gizmoPos,
+      gizmoScale,
+      axes,
+    );
+  }
+  if (mode === "scale") {
+    if (!axes) return null;
+    return hitTestScaleGizmoScreen(
       clientX,
       clientY,
       canvas,
@@ -679,7 +831,7 @@ export function hitTestTranslateGizmoScreen(
 function axisScreenSegmentPick(
   clientX: number,
   clientY: number,
-  axis: GizmoAxis,
+  axisDirWorld: Vec3,
   canvas: HTMLCanvasElement,
   rotX: number,
   rotY: number,
@@ -692,7 +844,7 @@ function axisScreenSegmentPick(
 
   const arrowLen = gizmoScale * GIZMO_ARROW_LENGTH_RATIO;
   const headLen = gizmoScale * GIZMO_HEAD_LENGTH_RATIO;
-  const tipWorld = add(gizmoPos, scaleVec(AXIS_DIRS[axis], arrowLen));
+  const tipWorld = add(gizmoPos, scaleVec(axisDirWorld, arrowLen));
   const tip = worldToClient(tipWorld, canvas, rotX, rotY, distance);
   if (!tip) return null;
 
@@ -752,7 +904,22 @@ function ringScreenAxisPick(
   return { dist };
 }
 
-/** True when the pointer is within pick tolerance of a specific gizmo axis. */
+/** Pointer distance (px) to the scale-gizmo center handle, or null off-canvas. */
+function centerScreenDistance(
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  gizmoPos: Vec3,
+): number | null {
+  const origin = worldToClient(gizmoPos, canvas, rotX, rotY, distance);
+  if (!origin) return null;
+  return Math.hypot(clientX - origin.x, clientY - origin.y);
+}
+
+/** True when the pointer is within pick tolerance of a specific gizmo handle. */
 export function isGizmoAxisNearScreen(
   clientX: number,
   clientY: number,
@@ -762,10 +929,24 @@ export function isGizmoAxisNearScreen(
   distance: number,
   gizmoPos: Vec3,
   gizmoScale: number,
-  axis: GizmoAxis,
+  handle: GizmoHandle,
   mode: GizmoPickMode,
   axes: GizmoWorldAxes | null,
 ): boolean {
+  if (handle === "c") {
+    if (mode !== "scale") return false;
+    const dCenter = centerScreenDistance(
+      clientX,
+      clientY,
+      canvas,
+      rotX,
+      rotY,
+      distance,
+      gizmoPos,
+    );
+    return dCenter !== null && dCenter <= GIZMO_HOVER_STICKY_PIXELS_HEAD;
+  }
+
   if (mode === "rotate") {
     if (!axes) return false;
     const ray = computeCameraRayFromClient(
@@ -780,7 +961,7 @@ export function isGizmoAxisNearScreen(
     const ring = ringScreenAxisPick(
       clientX,
       clientY,
-      axis,
+      handle,
       canvas,
       rotX,
       rotY,
@@ -793,10 +974,12 @@ export function isGizmoAxisNearScreen(
     return ring !== null && ring.dist <= GIZMO_HOVER_STICKY_PIXELS_RING;
   }
 
+  if (mode === "scale" && !axes) return false;
+  const axisDir = mode === "scale" && axes ? axes[handle] : AXIS_DIRS[handle];
   const seg = axisScreenSegmentPick(
     clientX,
     clientY,
-    axis,
+    axisDir,
     canvas,
     rotX,
     rotY,
@@ -824,8 +1007,8 @@ export function pickGizmoAxisScreen(
   gizmoPos: Vec3,
   gizmoScale: number,
   axes: GizmoWorldAxes | null,
-  previousAxis: GizmoAxis | null,
-): GizmoAxis | null {
+  previousAxis: GizmoHandle | null,
+): GizmoHandle | null {
   const raw = hitTestGizmoScreen(
     mode,
     clientX,
@@ -854,7 +1037,7 @@ export function pickGizmoAxisScreen(
   );
 }
 
-/** Keep hover axis when GPU single-pixel pick flickers on thin gizmo geometry. */
+/** Keep hover handle when GPU single-pixel pick flickers on thin gizmo geometry. */
 export function stabilizeGizmoHoverAxis(
   clientX: number,
   clientY: number,
@@ -864,59 +1047,29 @@ export function stabilizeGizmoHoverAxis(
   distance: number,
   gizmoPos: Vec3,
   gizmoScale: number,
-  gpuAxis: GizmoAxis | null,
-  previousAxis: GizmoAxis | null,
+  gpuAxis: GizmoHandle | null,
+  previousAxis: GizmoHandle | null,
   mode: GizmoPickMode,
   axes: GizmoWorldAxes | null,
-): GizmoAxis | null {
+): GizmoHandle | null {
   if (gpuAxis) return gpuAxis;
   if (!previousAxis) return null;
 
-  if (mode === "rotate") {
-    if (!axes) return null;
-    const ray = computeCameraRayFromClient(
-      clientX,
-      clientY,
-      canvas,
-      rotX,
-      rotY,
-      distance,
-    );
-    if (!ray) return null;
-    const ring = ringScreenAxisPick(
-      clientX,
-      clientY,
-      previousAxis,
-      canvas,
-      rotX,
-      rotY,
-      distance,
-      gizmoPos,
-      gizmoScale,
-      axes,
-      ray.direction,
-    );
-    if (!ring) return null;
-    return ring.dist <= GIZMO_HOVER_STICKY_PIXELS_RING ? previousAxis : null;
-  }
-
-  const seg = axisScreenSegmentPick(
+  return isGizmoAxisNearScreen(
     clientX,
     clientY,
-    previousAxis,
     canvas,
     rotX,
     rotY,
     distance,
     gizmoPos,
     gizmoScale,
-  );
-  if (!seg) return null;
-
-  const stickyRadius = seg.onHead
-    ? GIZMO_HOVER_STICKY_PIXELS_HEAD
-    : GIZMO_HOVER_STICKY_PIXELS_SHAFT;
-  return seg.dist <= stickyRadius ? previousAxis : null;
+    previousAxis,
+    mode,
+    axes,
+  )
+    ? previousAxis
+    : null;
 }
 
 export type AxisScreenDragState = {
@@ -1325,6 +1478,112 @@ export function applyWorldRotationToItem(
     updateLayer(found.container.id, found.item.id, { rotation });
   } else {
     updateGroup(found.item.id, { rotation });
+  }
+}
+
+export type ScaleDragState = {
+  handle: GizmoHandle;
+  startScale: [number, number, number];
+  /** null for the uniform (center) handle. */
+  axisScreen: AxisScreenDragState | null;
+  refWorldLen: number;
+  startClientX: number;
+  startClientY: number;
+};
+
+/**
+ * ponytail: fixed px sensitivity for the uniform handle (right/up drag of this
+ * many px doubles the scale) — the handle sits at the pivot, so Blender's
+ * distance-ratio math would divide by ~0 at drag start. Upgrade path: offset
+ * the reference point away from the pivot and use the distance ratio.
+ */
+const UNIFORM_SCALE_DRAG_PX = 150;
+
+/** Capture scale-drag basis at pointer down (fixed for whole drag). */
+export function beginScaleDrag(
+  clientX: number,
+  clientY: number,
+  canvas: HTMLCanvasElement,
+  rotX: number,
+  rotY: number,
+  distance: number,
+  pivotWorld: Vec3,
+  handle: GizmoHandle,
+  axes: GizmoWorldAxes,
+  gizmoScale: number,
+  startScale: [number, number, number],
+): ScaleDragState | null {
+  const refWorldLen = gizmoScale * GIZMO_ARROW_LENGTH_RATIO;
+
+  let axisScreen: AxisScreenDragState | null = null;
+  if (handle !== "c") {
+    axisScreen = beginAxisScreenDrag(
+      clientX,
+      clientY,
+      canvas,
+      rotX,
+      rotY,
+      distance,
+      pivotWorld,
+      axes[handle],
+      refWorldLen,
+    );
+    if (!axisScreen) return null;
+  }
+
+  return {
+    handle,
+    startScale: [...startScale],
+    axisScreen,
+    refWorldLen,
+    startClientX: clientX,
+    startClientY: clientY,
+  };
+}
+
+/** Multiplicative scale factor for the current pointer position. */
+export function scaleFactorFromScreenDrag(
+  clientX: number,
+  clientY: number,
+  state: ScaleDragState,
+): number {
+  if (state.axisScreen) {
+    const delta = axisDeltaFromScreenDrag(clientX, clientY, state.axisScreen);
+    return scaleFactorFromAxisDelta(state.refWorldLen, delta);
+  }
+  // Uniform: drag right/up grows, left/down shrinks.
+  const screenDelta =
+    clientX - state.startClientX - (clientY - state.startClientY);
+  return 1 + screenDelta / UNIFORM_SCALE_DRAG_PX;
+}
+
+const SCALE_HANDLE_INDEX: Record<GizmoHandle, 0 | 1 | 2 | null> = {
+  x: 0,
+  y: 1,
+  z: 2,
+  c: null,
+};
+
+export function applyScaleFactorToItem(
+  root: SceneRoot,
+  itemId: string,
+  state: ScaleDragState,
+  factor: number,
+): void {
+  const found = findItem(root, itemId);
+  if (!found) return;
+
+  const scale = applyFactorToScale(
+    state.startScale,
+    SCALE_HANDLE_INDEX[state.handle],
+    factor,
+  );
+
+  const { updateLayer, updateGroup } = useSceneStore.getState();
+  if (found.item.kind === "layer") {
+    updateLayer(found.container.id, found.item.id, { scale });
+  } else {
+    updateGroup(found.item.id, { scale });
   }
 }
 
