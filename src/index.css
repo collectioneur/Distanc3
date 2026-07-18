@@ -72,9 +72,6 @@
   /* Effects */
   --blur-panel: blur(16px) saturate(1.1);
   --transition-fast: 0.15s;
-
-  /* Side panels — height synced from Scene panel before first paint */
-  --scene-panel-height: 180px;
 }
 
 *,
@@ -359,15 +356,16 @@ canvas {
   left: var(--space-3);
   top: 15vh;
   width: 230px;
-  height: fit-content;
+  height: 70vh;
   max-height: 70vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .scene-list {
   flex: 1;
-  min-height: 80px;
+  min-height: 0;
   overflow: hidden;
   padding: 6px 0;
 }
@@ -492,7 +490,8 @@ canvas {
 
 .panel-right {
   top: 15vh;
-  height: var(--scene-panel-height);
+  height: 70vh;
+  max-height: 70vh;
   right: var(--space-3);
   width: 220px;
   display: flex;

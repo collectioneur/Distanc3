@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Tree, type DragPreviewProps, type NodeRendererProps } from "react-arborist";
 import { useTreeApi } from "react-arborist/dist/module/context.js";
@@ -32,6 +32,8 @@ import {
   type OpType,
 } from "../../store/sceneStore";
 import { showToast } from "../../utils/toast";
+
+const SCENE_TREE_WIDTH = 218;
 
 const SHAPE_ICON: Record<string, LucideIcon> = {
   sphere: Circle,
@@ -229,27 +231,7 @@ function SceneRootHeader({
 export default function LeftPanel() {
   const [sceneCollapsed, setSceneCollapsed] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const { width, height } = useElementSize(listRef);
-
-  useLayoutEffect(() => {
-    const el = panelRef.current;
-    if (!el) return;
-
-    const rootStyle = document.documentElement.style;
-    const measure = () => {
-      rootStyle.setProperty("--scene-panel-height", `${el.getBoundingClientRect().height}px`);
-    };
-
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    window.addEventListener("resize", measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", measure);
-    };
-  }, []);
+  const { height: listHeight } = useElementSize(listRef);
 
   const root = useSceneStore((s) => s.root);
   const selectedItemId = useSceneStore((s) => s.selectedItemId);
@@ -292,7 +274,7 @@ export default function LeftPanel() {
   }
 
   return (
-    <div className="panel panel-left" ref={panelRef}>
+    <div className="panel panel-left">
       <div className="panel-header">Scene</div>
       <SceneRootHeader
         collapsed={sceneCollapsed}
@@ -302,11 +284,11 @@ export default function LeftPanel() {
         {!sceneCollapsed && root.items.length === 0 && (
           <p className="scene-object-empty">Empty — add a shape from the top bar.</p>
         )}
-        {!sceneCollapsed && root.items.length > 0 && (
+        {!sceneCollapsed && root.items.length > 0 && listHeight > 0 && (
           <Tree<ArboristNode>
             data={arboristData}
-            width={Math.max(width, 1)}
-            height={Math.max(height, 1)}
+            width={SCENE_TREE_WIDTH}
+            height={listHeight}
             indent={12}
             rowHeight={32}
             openByDefault
