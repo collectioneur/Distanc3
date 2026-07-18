@@ -290,6 +290,28 @@ export function createShader(root: TgpuRoot) {
     return d.vec3f(acc.x / s.x, acc.y / s.y, acc.z / s.z);
   };
 
+  const mulVec3 = (a: d.v3f, b: d.v3f): d.v3f => {
+    "use gpu";
+    return d.vec3f(a.x * b.x, a.y * b.y, a.z * b.z);
+  };
+
+  // Undo a shape's own rotation in a temporarily "unscaled" frame (multiply by
+  // the ancestor scale, rotate, then divide back out) so a non-uniform parent
+  // scale never shears the shape's own orientation into a skewed parallelogram.
+  // Equivalent to leaving the scale outside the rotation in the forward
+  // transform (Rgroup * Rshape * Sgroup * local) instead of sandwiching the
+  // rotation inside the scale (Rgroup * Sgroup * Rshape * local).
+  const applyShapeRotationUnsheared = (
+    diff: d.v3f,
+    rot: d.v3f,
+    outerScl: d.v3f,
+  ): d.v3f => {
+    "use gpu";
+    const scaledUp = mulVec3(diff, outerScl);
+    const rotated = applyInvRotXYZ(scaledUp, rot);
+    return divAccSclBy(rotated, outerScl);
+  };
+
   const evalShape = (lp: d.v3f, shapeType: d.u32, params: d.v4f): number => {
     "use gpu";
     let result = d.f32(1e10);
@@ -466,7 +488,11 @@ export function createShader(root: TgpuRoot) {
             pEval = applyParentTransform(pEval, tPos14, tRot14, tScl14);
           if (tsp > d.u32(15))
             pEval = applyParentTransform(pEval, tPos15, tRot15, tScl15);
-          const lp = applyInvRotXYZ(pEval - instr.position, instr.rotation);
+          const lp = applyShapeRotationUnsheared(
+            pEval - instr.position,
+            instr.rotation,
+            accScl,
+          );
           let val = evalShape(lp, instr.shapeType, instr.params);
           val = val * minVec3(accScl);
           if (sp === d.u32(0)) s0 = val;
@@ -844,7 +870,11 @@ export function createShader(root: TgpuRoot) {
           pEval = applyParentTransform(pEval, tPos14, tRot14, tScl14);
         if (tsp > d.u32(15))
           pEval = applyParentTransform(pEval, tPos15, tRot15, tScl15);
-        const lp = applyInvRotXYZ(pEval - instr.position, instr.rotation);
+        const lp = applyShapeRotationUnsheared(
+          pEval - instr.position,
+          instr.rotation,
+          accScl,
+        );
         let val = evalShape(lp, instr.shapeType, instr.params);
         val = val * minVec3(accScl);
         if (sp === d.u32(0)) s0 = val;
@@ -1147,7 +1177,11 @@ export function createShader(root: TgpuRoot) {
           pEval = applyParentTransform(pEval, tPos14, tRot14, tScl14);
         if (tsp > d.u32(15))
           pEval = applyParentTransform(pEval, tPos15, tRot15, tScl15);
-        const lp = applyInvRotXYZ(pEval - instr.position, instr.rotation);
+        const lp = applyShapeRotationUnsheared(
+          pEval - instr.position,
+          instr.rotation,
+          accScl,
+        );
         let val = evalShape(lp, instr.shapeType, instr.params);
         val = val * minVec3(accScl);
         if (sp === d.u32(0)) s0 = val;
