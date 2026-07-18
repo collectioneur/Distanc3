@@ -6,6 +6,7 @@ import {
   type OpType,
   type ShapeLayer,
 } from "../../store/sceneStore";
+import { roundTo } from "../../utils/round";
 
 // ── Shared numeric input ──────────────────────────────────────────────────────
 
@@ -14,28 +15,32 @@ function NumericInput({
   value,
   min,
   step,
+  decimals,
   onChange,
 }: {
   label: string;
   value: number;
   min?: number;
   step?: number;
+  decimals?: number;
   onChange: (v: number) => void;
 }) {
+  const display = decimals != null ? roundTo(value, decimals) : value;
+
   return (
     <div className="prop-row">
       <label className="prop-label">{label}</label>
       <input
         className="prop-input"
         type="number"
-        value={value}
+        value={display}
         min={min}
         step={step ?? 0.1}
         onFocus={() => temporalStore.getState().pause()}
         onBlur={() => temporalStore.getState().resume()}
         onChange={(e) => {
           const n = parseFloat(e.target.value);
-          if (!isNaN(n)) onChange(n);
+          if (!isNaN(n)) onChange(decimals != null ? roundTo(n, decimals) : n);
         }}
       />
     </div>
@@ -215,14 +220,14 @@ function GroupProperties({ group, itemIndex }: { group: ObjectGroup; itemIndex: 
       <div className="props-section-title" style={{ marginTop: showOp ? "16px" : undefined }}>
         Position
       </div>
-      <NumericInput label="X" value={group.position[0]} step={0.1} onChange={(v) => setPosition(0, v)} />
-      <NumericInput label="Y" value={group.position[1]} step={0.1} onChange={(v) => setPosition(1, v)} />
-      <NumericInput label="Z" value={group.position[2]} step={0.1} onChange={(v) => setPosition(2, v)} />
+      <NumericInput label="X" value={group.position[0]} step={0.1} decimals={2} onChange={(v) => setPosition(0, v)} />
+      <NumericInput label="Y" value={group.position[1]} step={0.1} decimals={2} onChange={(v) => setPosition(1, v)} />
+      <NumericInput label="Z" value={group.position[2]} step={0.1} decimals={2} onChange={(v) => setPosition(2, v)} />
 
       <div className="props-section-title" style={{ marginTop: "16px" }}>Rotation (°)</div>
-      <NumericInput label="Rx" value={group.rotation[0]} step={1} onChange={(v) => setRotation(0, v)} />
-      <NumericInput label="Ry" value={group.rotation[1]} step={1} onChange={(v) => setRotation(1, v)} />
-      <NumericInput label="Rz" value={group.rotation[2]} step={1} onChange={(v) => setRotation(2, v)} />
+      <NumericInput label="Rx" value={group.rotation[0]} step={1} decimals={2} onChange={(v) => setRotation(0, v)} />
+      <NumericInput label="Ry" value={group.rotation[1]} step={1} decimals={2} onChange={(v) => setRotation(1, v)} />
+      <NumericInput label="Rz" value={group.rotation[2]} step={1} decimals={2} onChange={(v) => setRotation(2, v)} />
 
       <div className="props-section-title" style={{ marginTop: "16px" }}>Scale</div>
       <NumericInput label="Sx" value={group.scale[0]} min={0.01} step={0.1} onChange={(v) => setScale(0, v)} />
@@ -277,14 +282,14 @@ function LayerProperties({
       <div className="props-section-title" style={{ marginTop: showOp ? "16px" : undefined }}>
         Position
       </div>
-      <NumericInput label="X" value={layer.position[0]} step={0.1} onChange={(v) => setPosition(0, v)} />
-      <NumericInput label="Y" value={layer.position[1]} step={0.1} onChange={(v) => setPosition(1, v)} />
-      <NumericInput label="Z" value={layer.position[2]} step={0.1} onChange={(v) => setPosition(2, v)} />
+      <NumericInput label="X" value={layer.position[0]} step={0.1} decimals={2} onChange={(v) => setPosition(0, v)} />
+      <NumericInput label="Y" value={layer.position[1]} step={0.1} decimals={2} onChange={(v) => setPosition(1, v)} />
+      <NumericInput label="Z" value={layer.position[2]} step={0.1} decimals={2} onChange={(v) => setPosition(2, v)} />
 
       <div className="props-section-title" style={{ marginTop: "16px" }}>Rotation (°)</div>
-      <NumericInput label="Rx" value={layer.rotation[0]} step={1} onChange={(v) => setRotation(0, v)} />
-      <NumericInput label="Ry" value={layer.rotation[1]} step={1} onChange={(v) => setRotation(1, v)} />
-      <NumericInput label="Rz" value={layer.rotation[2]} step={1} onChange={(v) => setRotation(2, v)} />
+      <NumericInput label="Rx" value={layer.rotation[0]} step={1} decimals={2} onChange={(v) => setRotation(0, v)} />
+      <NumericInput label="Ry" value={layer.rotation[1]} step={1} decimals={2} onChange={(v) => setRotation(1, v)} />
+      <NumericInput label="Rz" value={layer.rotation[2]} step={1} decimals={2} onChange={(v) => setRotation(2, v)} />
 
       <div className="props-section-title" style={{ marginTop: "16px" }}>Size</div>
       {sizeFields.map((f) => (
@@ -294,6 +299,7 @@ function LayerProperties({
           value={layer.params[f.paramIndex]}
           min={f.min}
           step={f.step}
+          decimals={2}
           onChange={(v) => setParam(f.paramIndex, v)}
         />
       ))}
