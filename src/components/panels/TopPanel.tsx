@@ -1,39 +1,14 @@
 import { useState, useRef } from "react";
 import { useStore } from "zustand";
-import {
-  Box,
-  Check,
-  Circle,
-  Cone,
-  Cylinder,
-  Link2,
-  Pill,
-  Redo2,
-  Torus,
-  Undo2,
-  type LucideIcon,
-} from "lucide-react";
-import {
-  useSceneStore,
-  temporalStore,
-  undoScene,
-  redoScene,
-  type ShapeType,
-} from "../../store/sceneStore";
-import { showToast } from "../../utils/toast";
+import { Check, Link2, Plus, Redo2, Undo2 } from "lucide-react";
+import { temporalStore, undoScene, redoScene } from "../../store/sceneStore";
+import { SHAPES, addShape } from "../../utils/commands";
+import { openPalette } from "../CommandPalette";
 
-const SHAPES: { type: ShapeType; label: string; icon: LucideIcon }[] = [
-  { type: "box", label: "Box", icon: Box },
-  { type: "sphere", label: "Sphere", icon: Circle },
-  { type: "torus", label: "Torus", icon: Torus },
-  { type: "cylinder", label: "Cylinder", icon: Cylinder },
-  { type: "capsule", label: "Capsule", icon: Pill },
-  { type: "cone", label: "Cone", icon: Cone },
-];
+const isMac = navigator.platform.startsWith("Mac");
+const paletteKey = isMac ? "⌘K" : "Ctrl+K";
 
 export default function TopPanel() {
-  const addShapeToContainer = useSceneStore((s) => s.addShapeToContainer);
-  const selectedContainerId = useSceneStore((s) => s.selectedContainerId);
   const canUndo = useStore(temporalStore, (s) => s.pastStates.length > 0);
   const canRedo = useStore(temporalStore, (s) => s.futureStates.length > 0);
 
@@ -46,13 +21,6 @@ export default function TopPanel() {
       if (copyTimer.current) clearTimeout(copyTimer.current);
       copyTimer.current = setTimeout(() => setCopied(false), 1500);
     });
-  }
-
-  function handleAddShape(type: ShapeType) {
-    const ok = addShapeToContainer(selectedContainerId, type);
-    if (!ok) {
-      showToast("Scene too complex (max 256 operations)");
-    }
   }
 
   return (
@@ -83,21 +51,25 @@ export default function TopPanel() {
         </button>
       </div>
       <div className="top-panel-divider" />
-      <span className="panel-label">Shapes</span>
       <div className="top-panel-shapes">
-        {SHAPES.map(({ type, label, icon: Icon }) => (
+        {SHAPES.map(({ type, label, icon: Icon }, i) => (
           <button
             key={type}
-            className="shape-btn"
-            onClick={() => handleAddShape(type)}
-            title={`Add ${label}`}
+            className="shape-btn shape-btn--icon"
+            onClick={() => addShape(type)}
+            title={`Add ${label} (${i + 1})`}
           >
-            <span className="shape-btn-icon">
-              <Icon size={14} />
-            </span>
-            <span className="shape-btn-label">{label}</span>
+            <Icon size={15} />
+            <span className="shape-btn-key">{i + 1}</span>
           </button>
         ))}
+        <button
+          className="shape-btn shape-btn--icon"
+          onClick={openPalette}
+          title={`All commands (${paletteKey})`}
+        >
+          <Plus size={15} />
+        </button>
       </div>
     </div>
   );

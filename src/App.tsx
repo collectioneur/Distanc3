@@ -4,6 +4,7 @@ import TopPanel from "./components/panels/TopPanel";
 import LeftPanel from "./components/panels/LeftPanel";
 import RightPanel from "./components/panels/RightPanel";
 import GizmoPanel from "./components/panels/GizmoPanel";
+import CommandPalette from "./components/CommandPalette";
 import RenderModePanel from "./components/panels/RenderModePanel";
 import { undoScene, redoScene } from "./store/sceneStore";
 import { usePersistence } from "./store/persistence";
@@ -62,6 +63,7 @@ export default function App() {
       <LeftPanel />
       <RightPanel />
       <GizmoPanel />
+      <CommandPalette />
       {toast && (
         <div
           style={{

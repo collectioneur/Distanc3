@@ -1,6 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Tree, type DragPreviewProps, type NodeRendererProps } from "react-arborist";
+import {
+  Tree,
+  type CursorProps,
+  type DragPreviewProps,
+  type NodeRendererProps,
+} from "react-arborist";
 import { useTreeApi } from "react-arborist/dist/module/context.js";
 import {
   arboristChildrenAccessor,
@@ -78,11 +83,20 @@ function SceneNode({
     );
   }
 
+  const itemClass = [
+    "scene-item",
+    !preview && node.isSelected && "scene-item--selected",
+    !preview && node.willReceiveDrop && "scene-item--drop-target",
+    !preview && node.isDragging && "scene-item--dragging",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <div
       ref={preview ? undefined : dragHandle}
       style={style}
-      className={`scene-item${!preview && node.isSelected ? " scene-item--selected" : ""}`}
+      className={itemClass}
       onClick={preview ? undefined : node.handleClick}
     >
       {isGroup && (
@@ -127,6 +141,21 @@ function SceneNode({
     </div>
   );
 }
+
+const SceneDropCursor = memo(function SceneDropCursor({ top, left, indent }: CursorProps) {
+  return (
+    <div
+      className="scene-drop-cursor"
+      style={{
+        position: "absolute",
+        pointerEvents: "none",
+        top,
+        left,
+        right: indent,
+      }}
+    />
+  );
+});
 
 /** Portal to body: panel transform/backdrop-filter break position:fixed for the default preview. */
 function SceneDragPreview({ offset, id, isDragging }: DragPreviewProps) {
@@ -294,6 +323,7 @@ export default function LeftPanel() {
             openByDefault
             dndRootElement={document.body}
             renderDragPreview={SceneDragPreview}
+            renderCursor={SceneDropCursor}
             selection={selectedItemId ?? undefined}
             disableMultiSelection
             idAccessor="id"
