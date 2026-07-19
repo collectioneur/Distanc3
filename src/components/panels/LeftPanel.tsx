@@ -14,19 +14,13 @@ import {
   type ArboristNode,
 } from "../../scene/arboristAdapter";
 import {
-  Box,
   Boxes,
   ChevronDown,
   ChevronRight,
-  Circle,
-  Cone,
-  Cylinder,
-  Pill,
   Plus,
-  Torus,
   X,
-  type LucideIcon,
 } from "lucide-react";
+import { SHAPE_ICONS } from "../../utils/commands";
 import { useElementSize } from "../../hooks/useElementSize";
 import {
   useSceneStore,
@@ -39,15 +33,6 @@ import {
 import { showToast } from "../../utils/toast";
 
 const SCENE_TREE_WIDTH = 218;
-
-const SHAPE_ICON: Record<string, LucideIcon> = {
-  sphere: Circle,
-  box: Box,
-  torus: Torus,
-  cylinder: Cylinder,
-  capsule: Pill,
-  cone: Cone,
-};
 
 const OP_ICON: Record<OpType, string> = {
   union: "∪",
@@ -115,7 +100,7 @@ function SceneNode({
       {!isGroup && <span className="scene-item-icon scene-item-icon--spacer" />}
       <span className="scene-item-icon">
         {(() => {
-          const Icon = isGroup ? Boxes : SHAPE_ICON[data.shapeType ?? "sphere"];
+          const Icon = isGroup ? Boxes : SHAPE_ICONS[data.shapeType ?? "sphere"];
           return <Icon size={14} />;
         })()}
       </span>

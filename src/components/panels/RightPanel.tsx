@@ -16,6 +16,7 @@ function NumericInput({
   label,
   value,
   min,
+  max,
   step,
   decimals,
   onChange,
@@ -23,6 +24,7 @@ function NumericInput({
   label: string;
   value: number;
   min?: number;
+  max?: number;
   step?: number;
   decimals?: number;
   onChange: (v: number) => void;
@@ -37,6 +39,7 @@ function NumericInput({
         type="number"
         value={display}
         min={min}
+        max={max}
         step={step ?? 0.1}
         onFocus={() => temporalStore.getState().pause()}
         onBlur={() => temporalStore.getState().resume()}
@@ -53,9 +56,10 @@ function NumericInput({
 
 interface SizeField {
   label: string;
-  paramIndex: 0 | 1 | 2;
+  paramIndex: 0 | 1 | 2 | 3;
   min: number;
   step: number;
+  max?: number;
 }
 
 const SIZE_FIELDS: Record<string, SizeField[]> = {
@@ -80,6 +84,79 @@ const SIZE_FIELDS: Record<string, SizeField[]> = {
   cone: [
     { label: "Radius", paramIndex: 0, min: 0.01, step: 0.05 },
     { label: "Half Height", paramIndex: 1, min: 0.01, step: 0.05 },
+  ],
+  roundedBox: [
+    { label: "Width", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Height", paramIndex: 1, min: 0.01, step: 0.05 },
+    { label: "Depth", paramIndex: 2, min: 0.01, step: 0.05 },
+    { label: "Round r", paramIndex: 3, min: 0, step: 0.01 },
+  ],
+  boxFrame: [
+    { label: "Width", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Height", paramIndex: 1, min: 0.01, step: 0.05 },
+    { label: "Depth", paramIndex: 2, min: 0.01, step: 0.05 },
+    { label: "Edge", paramIndex: 3, min: 0.005, step: 0.01 },
+  ],
+  cappedTorus: [
+    { label: "Major R", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Minor r", paramIndex: 1, min: 0.01, step: 0.05 },
+    { label: "Angle °", paramIndex: 2, min: 1, max: 180, step: 5 },
+  ],
+  link: [
+    { label: "Half Length", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Major R", paramIndex: 1, min: 0.01, step: 0.05 },
+    { label: "Minor r", paramIndex: 2, min: 0.01, step: 0.01 },
+  ],
+  hexPrism: [
+    { label: "Radius", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Half Height", paramIndex: 1, min: 0.01, step: 0.05 },
+  ],
+  triPrism: [
+    { label: "Radius", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Half Height", paramIndex: 1, min: 0.01, step: 0.05 },
+  ],
+  roundedCylinder: [
+    { label: "Radius", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Round r", paramIndex: 1, min: 0.005, step: 0.01 },
+    { label: "Half Height", paramIndex: 2, min: 0.01, step: 0.05 },
+  ],
+  roundCone: [
+    { label: "Bottom R", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Top R", paramIndex: 1, min: 0.01, step: 0.05 },
+    { label: "Height", paramIndex: 2, min: 0.01, step: 0.05 },
+  ],
+  solidAngle: [
+    { label: "Angle °", paramIndex: 0, min: 1, max: 179, step: 5 },
+    { label: "Radius", paramIndex: 1, min: 0.01, step: 0.05 },
+  ],
+  cutSphere: [
+    { label: "Radius", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Cut Height", paramIndex: 1, min: -10, step: 0.05 },
+  ],
+  cutHollowSphere: [
+    { label: "Radius", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Cut Height", paramIndex: 1, min: -10, step: 0.05 },
+    { label: "Thickness", paramIndex: 2, min: 0.005, step: 0.01 },
+  ],
+  deathStar: [
+    { label: "Sphere R", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Carve R", paramIndex: 1, min: 0.01, step: 0.05 },
+    { label: "Offset", paramIndex: 2, min: 0.01, step: 0.05 },
+  ],
+  rhombus: [
+    { label: "Half Diag A", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Half Diag B", paramIndex: 1, min: 0.01, step: 0.05 },
+    { label: "Half Height", paramIndex: 2, min: 0.01, step: 0.05 },
+    { label: "Round r", paramIndex: 3, min: 0, step: 0.01 },
+  ],
+  octahedron: [{ label: "Size", paramIndex: 0, min: 0.01, step: 0.05 }],
+  pyramid: [
+    { label: "Base", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Height", paramIndex: 1, min: 0.01, step: 0.05 },
+  ],
+  vesica: [
+    { label: "Radius", paramIndex: 0, min: 0.01, step: 0.05 },
+    { label: "Offset", paramIndex: 1, min: 0.005, step: 0.05 },
   ],
 };
 
@@ -262,7 +339,7 @@ function LayerProperties({
     updateLayer(containerId, layer.id, { rotation: rot });
   };
 
-  const setParam = (idx: 0 | 1 | 2, v: number) => {
+  const setParam = (idx: 0 | 1 | 2 | 3, v: number) => {
     const params: [number, number, number, number] = [...layer.params];
     params[idx] = v;
     updateLayer(containerId, layer.id, { params });
@@ -311,6 +388,7 @@ function LayerProperties({
           label={f.label}
           value={layer.params[f.paramIndex]}
           min={f.min}
+          max={f.max}
           step={f.step}
           decimals={2}
           onChange={(v) => setParam(f.paramIndex, v)}

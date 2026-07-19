@@ -174,24 +174,63 @@ function pushTransformPop(out: InstructionData[]): void {
 
 /** Conservative shape bound radius in its own local space (rotation-invariant). */
 function shapeBoundRadius(layer: ShapeLayer): number {
-  const [a, b, c] = layer.params;
+  const [a, b, c, w] = layer.params;
   const maxScale = Math.max(
     Math.abs(layer.scale[0]),
     Math.abs(layer.scale[1]),
     Math.abs(layer.scale[2]),
   );
+  let r: number;
   switch (layer.shapeType) {
     case "sphere":
-      return a * maxScale;
+    case "octahedron":
+    case "cutSphere":
+    case "deathStar":
+    case "vesica":
+      r = a;
+      break;
     case "box":
-      return Math.hypot(a, b, c) * maxScale;
+      r = Math.hypot(a, b, c);
+      break;
+    case "roundedBox":
+    case "boxFrame":
+      r = Math.hypot(a, b, c) + w;
+      break;
     case "torus":
-      return (a + b) * maxScale;
     case "capsule":
-      return (a + b) * maxScale;
-    default: // cylinder, cone
-      return Math.hypot(a, b) * maxScale;
+    case "cappedTorus":
+      r = a + b;
+      break;
+    case "link":
+      r = a + b + c;
+      break;
+    case "roundedCylinder":
+      r = Math.hypot(a, b + c);
+      break;
+    case "roundCone":
+      // Base circle r1 sits at y=0, top cap r2 at y=h — not origin-centered.
+      r = Math.max(a, b + c);
+      break;
+    case "solidAngle":
+      r = b;
+      break;
+    case "cutHollowSphere":
+      r = a + c;
+      break;
+    case "rhombus":
+      r = Math.hypot(a + w, b + w, c);
+      break;
+    case "hexPrism":
+      // Corner circumradius = inradius * 2/sqrt(3).
+      r = Math.hypot(a * 1.1548, b);
+      break;
+    default: // cylinder, cone, triPrism, pyramid
+      // ponytail: hypot of first two params over-covers prisms/pyramid a bit;
+      // exact per-shape circumradii is the upgrade path.
+      r = Math.hypot(a, b);
+      break;
   }
+  return r * maxScale;
 }
 
 /**

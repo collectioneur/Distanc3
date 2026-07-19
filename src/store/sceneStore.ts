@@ -5,7 +5,29 @@ import { applyMoveToRoot } from "../scene/arboristAdapter";
 import { loadInitialState } from "./persistence";
 import { showToast } from "../utils/toast";
 
-export type ShapeType = "sphere" | "box" | "torus" | "cylinder" | "capsule" | "cone";
+export type ShapeType =
+  | "sphere"
+  | "box"
+  | "torus"
+  | "cylinder"
+  | "capsule"
+  | "cone"
+  | "roundedBox"
+  | "boxFrame"
+  | "cappedTorus"
+  | "link"
+  | "hexPrism"
+  | "triPrism"
+  | "roundedCylinder"
+  | "roundCone"
+  | "solidAngle"
+  | "cutSphere"
+  | "cutHollowSphere"
+  | "deathStar"
+  | "rhombus"
+  | "octahedron"
+  | "pyramid"
+  | "vesica";
 export type OpType = "union" | "subtract" | "intersect" | "sUnion" | "sSubtract" | "sIntersect";
 
 export type ShapeLayer = {
@@ -60,6 +82,22 @@ const DEFAULT_PARAMS: Record<ShapeType, [number, number, number, number]> = {
   cylinder: [0.3, 0.5, 0, 0],
   capsule: [0.25, 0.4, 0, 0],
   cone: [0.4, 0.6, 0, 0],
+  roundedBox: [0.35, 0.35, 0.35, 0.1],
+  boxFrame: [0.4, 0.4, 0.4, 0.05],
+  cappedTorus: [0.4, 0.15, 120, 0], // R, r, aperture in degrees
+  link: [0.25, 0.3, 0.1, 0], // half length, major R, minor r
+  hexPrism: [0.4, 0.4, 0, 0],
+  triPrism: [0.4, 0.4, 0, 0],
+  roundedCylinder: [0.3, 0.1, 0.4, 0],
+  roundCone: [0.35, 0.15, 0.7, 0], // bottom r, top r, height
+  solidAngle: [45, 0.5, 0, 0], // aperture in degrees, radius
+  cutSphere: [0.5, 0.2, 0, 0], // radius, cut height
+  cutHollowSphere: [0.5, 0.2, 0.03, 0], // radius, cut height, thickness
+  deathStar: [0.5, 0.35, 0.5, 0], // sphere R, carved R, offset
+  rhombus: [0.5, 0.3, 0.1, 0.02], // half diag a, half diag b, half height, corner r
+  octahedron: [0.5, 0, 0, 0],
+  pyramid: [0.7, 0.7, 0, 0], // base width, height
+  vesica: [0.5, 0.25, 0, 0], // radius, offset
 };
 
 const TYPE_LABEL: Record<ShapeType, string> = {
@@ -69,7 +107,36 @@ const TYPE_LABEL: Record<ShapeType, string> = {
   cylinder: "Cylinder",
   capsule: "Capsule",
   cone: "Cone",
+  roundedBox: "Rounded Box",
+  boxFrame: "Box Frame",
+  cappedTorus: "Capped Torus",
+  link: "Link",
+  hexPrism: "Hex Prism",
+  triPrism: "Tri Prism",
+  roundedCylinder: "Rounded Cylinder",
+  roundCone: "Round Cone",
+  solidAngle: "Solid Angle",
+  cutSphere: "Cut Sphere",
+  cutHollowSphere: "Cut Hollow Sphere",
+  deathStar: "Death Star",
+  rhombus: "Rhombus",
+  octahedron: "Octahedron",
+  pyramid: "Pyramid",
+  vesica: "Vesica",
 };
+
+export const ALL_SHAPE_TYPES = Object.keys(TYPE_LABEL) as ShapeType[];
+
+export function shapeLabel(type: ShapeType): string {
+  return TYPE_LABEL[type];
+}
+
+export function zeroCounters(): Record<ShapeType, number> {
+  return Object.fromEntries(ALL_SHAPE_TYPES.map((t) => [t, 0])) as Record<
+    ShapeType,
+    number
+  >;
+}
 
 export function createDefaultRoot(): SceneRoot {
   return {
@@ -326,14 +393,8 @@ export const useSceneStore = create<SceneState>()(
       selectedContainerId: _initialRoot.id,
       selectedItemId: null,
       rootSelected: false,
-      counters: _saved.counters ?? {
-        sphere: 0,
-        box: 0,
-        torus: 0,
-        cylinder: 0,
-        capsule: 0,
-        cone: 0,
-      },
+      // Merge: scenes saved before new shapes existed lack their counter keys.
+      counters: { ...zeroCounters(), ..._saved.counters },
       groupCounter: _saved.groupCounter ?? 0,
 
       addShapeToContainer: (containerId, shapeType) => {

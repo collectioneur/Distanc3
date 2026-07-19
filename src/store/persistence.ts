@@ -1,5 +1,11 @@
 import { useEffect, useRef } from "react";
-import { createDefaultRoot, type SceneRoot, type ShapeType, useSceneStore } from "./sceneStore";
+import {
+  createDefaultRoot,
+  zeroCounters,
+  type SceneRoot,
+  type ShapeType,
+  useSceneStore,
+} from "./sceneStore";
 import { temporalStore } from "./sceneStore";
 
 const SCHEMA_VERSION = 4;
@@ -85,7 +91,7 @@ export function loadInitialState(): Partial<PersistedScene> {
 function applyScene(scene: PersistedScene) {
   useSceneStore.setState({
     root: scene.root,
-    counters: scene.counters,
+    counters: { ...zeroCounters(), ...scene.counters },
     groupCounter: scene.groupCounter,
     selectedContainerId: scene.root.id,
     selectedItemId: null,
@@ -143,7 +149,7 @@ export function usePersistence(): void {
         const root = createDefaultRoot();
         useSceneStore.setState({
           root,
-          counters: { sphere: 0, box: 0, torus: 0, cylinder: 0, capsule: 0, cone: 0 },
+          counters: zeroCounters(),
           groupCounter: 0,
           selectedContainerId: root.id,
           selectedItemId: null,

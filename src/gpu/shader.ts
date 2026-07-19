@@ -30,6 +30,22 @@ export const SHAPE_TYPE_INT = {
   cylinder: 3,
   capsule: 4,
   cone: 5,
+  roundedBox: 6,
+  boxFrame: 7,
+  cappedTorus: 8,
+  link: 9,
+  hexPrism: 10,
+  triPrism: 11,
+  roundedCylinder: 12,
+  roundCone: 13,
+  solidAngle: 14,
+  cutSphere: 15,
+  cutHollowSphere: 16,
+  deathStar: 17,
+  rhombus: 18,
+  octahedron: 19,
+  pyramid: 20,
+  vesica: 21,
 } as const;
 
 export const OP_TYPE_INT = {
@@ -45,7 +61,7 @@ export const OP_TYPE_INT = {
 // Layout: 4×u32/f32 header (16 bytes) + 3×(vec3f/vec4f + pad) (48 bytes) + vec3f+pad (16 bytes) = 80 bytes
 const Instruction = d.struct({
   opcode: d.u32, // 0=PUSH_SHAPE, 1=OP, 2=TRANSFORM_PUSH, 3=TRANSFORM_POP
-  shapeType: d.u32, // for PUSH_SHAPE: 0-5
+  shapeType: d.u32, // for PUSH_SHAPE: SHAPE_TYPE_INT value
   opType: d.u32, // for OP: 0=union,1=subtract,2=intersect,3=sUnion,4=sSubtract,5=sIntersect
   smoothK: d.f32, // for smooth OPs
   position: d.vec3f, // for PUSH_SHAPE / TRANSFORM_PUSH
@@ -289,6 +305,303 @@ export function createShader(root: TgpuRoot) {
     return s * std.sqrt(std.min(std.dot(ca, ca), std.dot(cb, cb)));
   };
 
+  const sdRoundedBox = (p: d.v3f, b: d.v3f, r: number): number => {
+    "use gpu";
+    const q = std.abs(p) - b;
+    return (
+      std.length(std.max(q, d.vec3f(0.0))) +
+      std.min(std.max(q.x, std.max(q.y, q.z)), 0.0) -
+      r
+    );
+  };
+
+  const sdBoxFrame = (pIn: d.v3f, b: d.v3f, e: number): number => {
+    "use gpu";
+    const p = std.abs(pIn) - b;
+    const q = std.abs(p + d.vec3f(e)) - d.vec3f(e);
+    const dA =
+      std.length(std.max(d.vec3f(p.x, q.y, q.z), d.vec3f(0.0))) +
+      std.min(std.max(p.x, std.max(q.y, q.z)), 0.0);
+    const dB =
+      std.length(std.max(d.vec3f(q.x, p.y, q.z), d.vec3f(0.0))) +
+      std.min(std.max(q.x, std.max(p.y, q.z)), 0.0);
+    const dC =
+      std.length(std.max(d.vec3f(q.x, q.y, p.z), d.vec3f(0.0))) +
+      std.min(std.max(q.x, std.max(q.y, p.z)), 0.0);
+    return std.min(dA, std.min(dB, dC));
+  };
+
+  // Angle params arrive in degrees (UI convention, same as rotation).
+  const sdCappedTorus = (
+    pIn: d.v3f,
+    ra: number,
+    rb: number,
+    angleDeg: number,
+  ): number => {
+    "use gpu";
+    const an = angleDeg * 0.017453292519943295;
+    const sc = d.vec2f(std.sin(an), std.cos(an));
+    // IQ's version is z-up; remap to this project's y-up torus orientation.
+    const p = d.vec3f(std.abs(pIn.x), pIn.z, pIn.y);
+    let k = std.length(d.vec2f(p.x, p.y));
+    if (sc.y * p.x > sc.x * p.y) {
+      k = std.dot(d.vec2f(p.x, p.y), sc);
+    }
+    return std.sqrt(std.dot(p, p) + ra * ra - 2.0 * ra * k) - rb;
+  };
+
+  const sdLink = (p: d.v3f, le: number, r1: number, r2: number): number => {
+    "use gpu";
+    const q = d.vec3f(p.x, std.max(std.abs(p.y) - le, 0.0), p.z);
+    return (
+      std.length(d.vec2f(std.length(d.vec2f(q.x, q.y)) - r1, q.z)) - r2
+    );
+  };
+
+  const sdHexPrism = (pIn: d.v3f, r: number, h: number): number => {
+    "use gpu";
+    const k = d.vec3f(-0.8660254, 0.5, 0.57735);
+    // y-up: prism axis along y (IQ's is along z).
+    const q0 = std.abs(d.vec3f(pIn.x, pIn.z, pIn.y));
+    const kd = 2.0 * std.min(std.dot(d.vec2f(k.x, k.y), d.vec2f(q0.x, q0.y)), 0.0);
+    const qx = q0.x - kd * k.x;
+    const qy = q0.y - kd * k.y;
+    const d1 =
+      std.length(d.vec2f(qx - std.clamp(qx, -k.z * r, k.z * r), qy - r)) *
+      std.sign(qy - r);
+    const d2 = q0.z - h;
+    return (
+      std.min(std.max(d1, d2), 0.0) +
+      std.length(std.max(d.vec2f(d1, d2), d.vec2f(0.0)))
+    );
+  };
+
+  const sdTriPrism = (pIn: d.v3f, r: number, h: number): number => {
+    "use gpu";
+    const p = d.vec3f(pIn.x, pIn.z, pIn.y);
+    const q = std.abs(p);
+    return std.max(
+      q.z - h,
+      std.max(q.x * 0.866025 + p.y * 0.5, -p.y) - r * 0.5,
+    );
+  };
+
+  const sdRoundedCylinder = (
+    p: d.v3f,
+    ra: number,
+    rb: number,
+    h: number,
+  ): number => {
+    "use gpu";
+    const d2 = d.vec2f(
+      std.length(d.vec2f(p.x, p.z)) - ra + rb,
+      std.abs(p.y) - h,
+    );
+    return (
+      std.min(std.max(d2.x, d2.y), 0.0) +
+      std.length(std.max(d2, d.vec2f(0.0))) -
+      rb
+    );
+  };
+
+  const sdRoundCone = (p: d.v3f, r1: number, r2: number, h: number): number => {
+    "use gpu";
+    // Clamp keeps sqrt real when |r1 - r2| >= h (user-editable params).
+    const b = std.clamp((r1 - r2) / std.max(h, 0.0001), -0.999, 0.999);
+    const a = std.sqrt(1.0 - b * b);
+    const q = d.vec2f(std.length(d.vec2f(p.x, p.z)), p.y);
+    const k = std.dot(q, d.vec2f(-b, a));
+    let result = std.dot(q, d.vec2f(a, b)) - r1;
+    if (k < 0.0) {
+      result = std.length(q) - r1;
+    } else if (k > a * h) {
+      result = std.length(q - d.vec2f(0.0, h)) - r2;
+    }
+    return result;
+  };
+
+  const sdSolidAngle = (p: d.v3f, angleDeg: number, ra: number): number => {
+    "use gpu";
+    const an = angleDeg * 0.017453292519943295;
+    const sc = d.vec2f(std.sin(an), std.cos(an));
+    const q = d.vec2f(std.length(d.vec2f(p.x, p.z)), p.y);
+    const l = std.length(q) - ra;
+    const m = std.length(q - sc * std.clamp(std.dot(q, sc), 0.0, ra));
+    return std.max(l, m * std.sign(sc.y * q.x - sc.x * q.y));
+  };
+
+  const sdCutSphere = (p: d.v3f, r: number, hIn: number): number => {
+    "use gpu";
+    const h = std.clamp(hIn, -r * 0.999, r * 0.999);
+    const w = std.sqrt(r * r - h * h);
+    const q = d.vec2f(std.length(d.vec2f(p.x, p.z)), p.y);
+    const s = std.max(
+      (h - r) * q.x * q.x + w * w * (h + r - 2.0 * q.y),
+      h * q.x - w * q.y,
+    );
+    let result = std.length(q - d.vec2f(w, h));
+    if (s < 0.0) {
+      result = std.length(q) - r;
+    } else if (q.x < w) {
+      result = h - q.y;
+    }
+    return result;
+  };
+
+  const sdCutHollowSphere = (
+    p: d.v3f,
+    r: number,
+    hIn: number,
+    t: number,
+  ): number => {
+    "use gpu";
+    const h = std.clamp(hIn, -r * 0.999, r * 0.999);
+    const w = std.sqrt(r * r - h * h);
+    const q = d.vec2f(std.length(d.vec2f(p.x, p.z)), p.y);
+    let result = std.abs(std.length(q) - r);
+    if (h * q.x < w * q.y) {
+      result = std.length(q - d.vec2f(w, h));
+    }
+    return result - t;
+  };
+
+  const sdDeathStar = (p: d.v3f, ra: number, rb: number, dOff: number): number => {
+    "use gpu";
+    const dd = std.max(dOff, 0.0001);
+    const a = (ra * ra - rb * rb + dd * dd) / (2.0 * dd);
+    const b = std.sqrt(std.max(ra * ra - a * a, 0.0));
+    // Cut opens along +y (IQ's is along +x).
+    const q = d.vec2f(p.y, std.length(d.vec2f(p.x, p.z)));
+    let result = std.max(
+      std.length(q) - ra,
+      -(std.length(q - d.vec2f(dd, 0.0)) - rb),
+    );
+    if (q.x * b - q.y * a > dd * std.max(b - q.y, 0.0)) {
+      result = std.length(q - d.vec2f(a, b));
+    }
+    return result;
+  };
+
+  const ndot2 = (a: d.v2f, b: d.v2f): number => {
+    "use gpu";
+    return a.x * b.x - a.y * b.y;
+  };
+
+  const sdRhombus = (
+    p: d.v3f,
+    la: number,
+    lb: number,
+    h: number,
+    ra: number,
+  ): number => {
+    "use gpu";
+    const q = std.abs(p);
+    const b = d.vec2f(la, lb);
+    const f = std.clamp(
+      ndot2(b, b - d.vec2f(2.0 * q.x, 2.0 * q.z)) / std.dot(b, b),
+      -1.0,
+      1.0,
+    );
+    const qx =
+      std.length(
+        d.vec2f(q.x, q.z) - b * d.vec2f(1.0 - f, 1.0 + f) * 0.5,
+      ) *
+        std.sign(q.x * b.y + q.z * b.x - b.x * b.y) -
+      ra;
+    const qy = q.y - h;
+    return (
+      std.min(std.max(qx, qy), 0.0) +
+      std.length(std.max(d.vec2f(qx, qy), d.vec2f(0.0)))
+    );
+  };
+
+  const sdOctahedron = (pIn: d.v3f, s: number): number => {
+    "use gpu";
+    const p = std.abs(pIn);
+    const m = p.x + p.y + p.z - s;
+    let result = m * 0.57735027;
+    let q = d.vec3f(0.0);
+    let onEdge = d.f32(0.0);
+    if (3.0 * p.x < m) {
+      q = d.vec3f(p.x, p.y, p.z);
+      onEdge = d.f32(1.0);
+    } else if (3.0 * p.y < m) {
+      q = d.vec3f(p.y, p.z, p.x);
+      onEdge = d.f32(1.0);
+    } else if (3.0 * p.z < m) {
+      q = d.vec3f(p.z, p.x, p.y);
+      onEdge = d.f32(1.0);
+    }
+    if (onEdge > 0.5) {
+      const k = std.clamp(0.5 * (q.z - q.y + s), 0.0, s);
+      result = std.length(d.vec3f(q.x, q.y - s + k, q.z - k));
+    }
+    return result;
+  };
+
+  // IQ's unit-base pyramid, uniformly scaled so `base` is the footprint width.
+  // IQ's original overestimates distance below the base plane (it only
+  // measures to the slant faces), which makes rays tunnel through the bottom
+  // and corrupts normals. Split: exact base-face distance for p.y < 0, slant
+  // machinery only when outside the slant half-space, analytic interior.
+  const sdPyramid = (pIn: d.v3f, base: number, height: number): number => {
+    "use gpu";
+    const invB = 1.0 / std.max(base, 0.0001);
+    const p0 = d.vec3f(pIn.x * invB, pIn.y * invB, pIn.z * invB);
+    const h = height * invB;
+    const m2 = h * h + 0.25;
+    let px = std.abs(p0.x);
+    let pz = std.abs(p0.z);
+    if (pz > px) {
+      const tmp = px;
+      px = pz;
+      pz = tmp;
+    }
+    px = px - 0.5;
+    pz = pz - 0.5;
+    const q = d.vec3f(pz, h * p0.y - 0.5 * px, h * px + 0.5 * p0.y);
+
+    // Fully inside: below the (folded) closest slant plane and above base.
+    if (q.z < 0.0 && p0.y > 0.0) {
+      return -std.min(-q.z / std.sqrt(m2), p0.y) * base;
+    }
+
+    let dSlant = d.f32(1e10);
+    if (q.z > 0.0) {
+      const s = std.max(-q.x, 0.0);
+      const t = std.clamp((q.y - 0.5 * pz) / (m2 + 0.25), 0.0, 1.0);
+      const a = m2 * (q.x + s) * (q.x + s) + q.y * q.y;
+      const b =
+        m2 * (q.x + 0.5 * t) * (q.x + 0.5 * t) +
+        (q.y - m2 * t) * (q.y - m2 * t);
+      let d2 = std.min(a, b);
+      if (std.min(q.y, -q.x * m2 - q.y * 0.5) > 0.0) {
+        d2 = d.f32(0.0);
+      }
+      dSlant = std.sqrt((d2 + q.z * q.z) / m2);
+    }
+    let dBase = d.f32(1e10);
+    if (p0.y < 0.0) {
+      dBase = std.length(
+        d.vec3f(std.max(px, 0.0), p0.y, std.max(pz, 0.0)),
+      );
+    }
+    return std.min(dSlant, dBase) * base;
+  };
+
+  // 2D vesica revolved around y — a lens/spindle solid.
+  const sdVesica = (p: d.v3f, r: number, dIn: number): number => {
+    "use gpu";
+    const dd = std.clamp(dIn, 0.0001, r * 0.999);
+    const b = std.sqrt(r * r - dd * dd);
+    const q = d.vec2f(std.length(d.vec2f(p.x, p.z)), std.abs(p.y));
+    let result = std.length(q - d.vec2f(-dd, 0.0)) - r;
+    if ((q.y - b) * dd > q.x * b) {
+      result = std.length(q - d.vec2f(0.0, b));
+    }
+    return result;
+  };
+
   const applyInvRotXYZ = (lp: d.v3f, rot: d.v3f): d.v3f => {
     "use gpu";
     const czn = std.cos(-rot.z);
@@ -361,6 +674,38 @@ export function createShader(root: TgpuRoot) {
       result = sdCapsule(lp, params.x, params.y);
     } else if (shapeType === d.u32(5)) {
       result = sdCone(lp, params.x, params.y);
+    } else if (shapeType === d.u32(6)) {
+      result = sdRoundedBox(lp, d.vec3f(params.x, params.y, params.z), params.w);
+    } else if (shapeType === d.u32(7)) {
+      result = sdBoxFrame(lp, d.vec3f(params.x, params.y, params.z), params.w);
+    } else if (shapeType === d.u32(8)) {
+      result = sdCappedTorus(lp, params.x, params.y, params.z);
+    } else if (shapeType === d.u32(9)) {
+      result = sdLink(lp, params.x, params.y, params.z);
+    } else if (shapeType === d.u32(10)) {
+      result = sdHexPrism(lp, params.x, params.y);
+    } else if (shapeType === d.u32(11)) {
+      result = sdTriPrism(lp, params.x, params.y);
+    } else if (shapeType === d.u32(12)) {
+      result = sdRoundedCylinder(lp, params.x, params.y, params.z);
+    } else if (shapeType === d.u32(13)) {
+      result = sdRoundCone(lp, params.x, params.y, params.z);
+    } else if (shapeType === d.u32(14)) {
+      result = sdSolidAngle(lp, params.x, params.y);
+    } else if (shapeType === d.u32(15)) {
+      result = sdCutSphere(lp, params.x, params.y);
+    } else if (shapeType === d.u32(16)) {
+      result = sdCutHollowSphere(lp, params.x, params.y, params.z);
+    } else if (shapeType === d.u32(17)) {
+      result = sdDeathStar(lp, params.x, params.y, params.z);
+    } else if (shapeType === d.u32(18)) {
+      result = sdRhombus(lp, params.x, params.y, params.z, params.w);
+    } else if (shapeType === d.u32(19)) {
+      result = sdOctahedron(lp, params.x);
+    } else if (shapeType === d.u32(20)) {
+      result = sdPyramid(lp, params.x, params.y);
+    } else if (shapeType === d.u32(21)) {
+      result = sdVesica(lp, params.x, params.y);
     }
     return result;
   };
