@@ -7,6 +7,7 @@ import GizmoPanel from "./components/panels/GizmoPanel";
 import CommandPalette from "./components/CommandPalette";
 import RenderModePanel from "./components/panels/RenderModePanel";
 import { undoScene, redoScene } from "./store/sceneStore";
+import { useGizmoStore } from "./store/gizmoStore";
 import { usePersistence } from "./store/persistence";
 import { setToastListener } from "./utils/toast";
 
@@ -39,6 +40,20 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && (e.code === "KeyY" || (e.shiftKey && e.code === "KeyZ"))) {
         e.preventDefault();
         redoScene();
+      }
+
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        const setMode = useGizmoStore.getState().setMode;
+        if (e.code === "KeyW") {
+          e.preventDefault();
+          setMode("translate");
+        } else if (e.code === "KeyE") {
+          e.preventDefault();
+          setMode("rotate");
+        } else if (e.code === "KeyR") {
+          e.preventDefault();
+          setMode("scale");
+        }
       }
     };
     window.addEventListener("keydown", handler);

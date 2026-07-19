@@ -1690,20 +1690,22 @@ export function createShader(root: TgpuRoot) {
       (active === d.u32(2) && axisId === d.u32(2)) ||
       (active === d.u32(3) && axisId === d.u32(3)) ||
       (active === d.u32(4) && axisId === d.u32(4));
-    let boost = d.f32(1.0);
-    if (isActive) {
-      boost = d.f32(1.35);
-    }
+    let full = d.vec3f(0.38, 0.58, 1.0);
     if (axisId === d.u32(1)) {
-      return d.vec3f(1.0, 0.28, 0.28) * boost;
+      full = d.vec3f(1.0, 0.3, 0.3);
     }
     if (axisId === d.u32(2)) {
-      return d.vec3f(0.28, 1.0, 0.28) * boost;
+      full = d.vec3f(0.3, 1.0, 0.3);
     }
     if (axisId === d.u32(4)) {
-      return d.vec3f(0.85, 0.85, 0.85) * boost;
+      full = d.vec3f(0.9, 0.9, 0.9);
     }
-    return d.vec3f(0.35, 0.55, 1.0) * boost;
+    if (isActive) {
+      return full * 1.2;
+    }
+    // Resting: desaturated + dimmed so the gizmo sits with the muted UI.
+    const gray = d.vec3f(0.62, 0.62, 0.62);
+    return std.mix(full, gray, d.f32(0.35)) * 0.6;
   };
 
   const GIZMO_HIT_EPS = 0.00015;

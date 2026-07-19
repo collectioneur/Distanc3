@@ -4,7 +4,6 @@ import { temporal } from "zundo";
 import { applyMoveToRoot } from "../scene/arboristAdapter";
 import { loadInitialState } from "./persistence";
 import { showToast } from "../utils/toast";
-import { roundLayerParams, roundVec3 } from "../utils/round";
 
 export type ShapeType = "sphere" | "box" | "torus" | "cylinder" | "capsule" | "cone";
 export type OpType = "union" | "subtract" | "intersect" | "sUnion" | "sSubtract" | "sIntersect";
@@ -430,34 +429,22 @@ export const useSceneStore = create<SceneState>()(
           };
         }),
 
+      // Values stored full-precision; rounding is display-only (NumericInput).
       updateLayer: (containerId, layerId, patch) =>
-        set((state) => {
-          const normalized = { ...patch };
-          if (normalized.position) normalized.position = roundVec3(normalized.position);
-          if (normalized.rotation) normalized.rotation = roundVec3(normalized.rotation);
-          if (normalized.scale) normalized.scale = roundVec3(normalized.scale);
-          if (normalized.params) normalized.params = roundLayerParams(normalized.params);
-          return {
-            root: mapRootContainer(state.root, containerId, (items) =>
-              items.map((item) =>
-                item.kind === "layer" && item.id === layerId ? { ...item, ...normalized } : item,
-              ),
+        set((state) => ({
+          root: mapRootContainer(state.root, containerId, (items) =>
+            items.map((item) =>
+              item.kind === "layer" && item.id === layerId ? { ...item, ...patch } : item,
             ),
-          };
-        }),
+          ),
+        })),
 
       updateGroup: (groupId, patch) =>
-        set((state) => {
-          const normalized = { ...patch };
-          if (normalized.position) normalized.position = roundVec3(normalized.position);
-          if (normalized.rotation) normalized.rotation = roundVec3(normalized.rotation);
-          if (normalized.scale) normalized.scale = roundVec3(normalized.scale);
-          return {
-            root: mapRootItem(state.root, groupId, (item) =>
-              item.kind === "group" ? { ...item, ...normalized } : item,
-            ),
-          };
-        }),
+        set((state) => ({
+          root: mapRootItem(state.root, groupId, (item) =>
+            item.kind === "group" ? { ...item, ...patch } : item,
+          ),
+        })),
 
       updateRootName: (name) =>
         set((state) => ({

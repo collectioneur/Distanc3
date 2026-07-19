@@ -123,6 +123,9 @@ canvas {
   color: var(--text-2);
   font-size: var(--text-md);
   user-select: none;
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.38),
+    0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 .panel-header {
@@ -149,16 +152,79 @@ canvas {
   padding: 0 var(--space-4);
 }
 
-.panel-bottom-center {
+/* ─── Segmented control (gizmo mode) ─────────────────────────── */
+
+.segmented {
+  position: relative;
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: var(--bg-input);
+}
+
+/* Standalone floating pill (no .panel wrapper) */
+.segmented--floating {
+  position: fixed;
+  z-index: 10;
   bottom: var(--space-3);
   left: 50%;
-  transform: translateX(-50%);
-  width: fit-content;
-  height: 52px;
+  translate: -50%;
+  background: var(--bg-panel);
+  backdrop-filter: var(--blur-panel);
+  -webkit-backdrop-filter: var(--blur-panel);
+  user-select: none;
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.38),
+    0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.segmented-indicator {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / 3);
+  border-radius: 999px;
+  background: var(--accent-strong);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: transform 0.22s cubic-bezier(0.3, 0.9, 0.4, 1);
+  pointer-events: none;
+}
+
+.segmented-btn {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-4);
+  justify-content: center;
+  gap: 6px;
+  width: 88px;
+  padding: 6px 10px 8px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.segmented-btn:hover {
+  color: var(--text-2);
+}
+
+.segmented-btn--active {
+  color: var(--accent-text);
+}
+
+.segmented-btn:hover .shape-btn-key,
+.segmented-btn--active .shape-btn-key {
+  color: var(--accent-text);
+}
+
+.segmented-btn .shape-btn-key {
+  bottom: 3px;
+  right: 6px;
 }
 
 .panel-label {

@@ -1339,9 +1339,8 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           sceneGpuDirty = false;
         }
 
-        const activeGizmoAxis = gizmoDragging
-          ? gizmoDragAxis
-          : gizmoHoverAxis;
+        // Highlight only while dragging; hover feedback stays cursor-only.
+        const activeGizmoAxis = gizmoDragging ? gizmoDragAxis : null;
         updateGizmoUniforms(sceneRoot, selectedItemId, distance, activeGizmoAxis);
 
         syncCameraUniform();

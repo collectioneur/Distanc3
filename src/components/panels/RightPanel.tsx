@@ -232,9 +232,9 @@ function GroupProperties({ group, itemIndex }: { group: ObjectGroup; itemIndex: 
       <NumericInput label="Rz" value={group.rotation[2]} step={1} decimals={2} onChange={(v) => setRotation(2, v)} />
 
       <div className="props-section-title" style={{ marginTop: "16px" }}>Scale</div>
-      <NumericInput label="Sx" value={group.scale[0]} min={0.01} step={0.1} onChange={(v) => setScale(0, v)} />
-      <NumericInput label="Sy" value={group.scale[1]} min={0.01} step={0.1} onChange={(v) => setScale(1, v)} />
-      <NumericInput label="Sz" value={group.scale[2]} min={0.01} step={0.1} onChange={(v) => setScale(2, v)} />
+      <NumericInput label="Sx" value={group.scale[0]} min={0.01} step={0.1} decimals={2} onChange={(v) => setScale(0, v)} />
+      <NumericInput label="Sy" value={group.scale[1]} min={0.01} step={0.1} decimals={2} onChange={(v) => setScale(1, v)} />
+      <NumericInput label="Sz" value={group.scale[2]} min={0.01} step={0.1} decimals={2} onChange={(v) => setScale(2, v)} />
     </div>
   );
 }
