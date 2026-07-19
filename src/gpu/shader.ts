@@ -108,6 +108,13 @@ const PickUniforms = d.struct({
   pickPass: d.u32,
 });
 
+const QualityUniforms = d.struct({
+  maxSteps: d.f32,
+  reflSteps: d.f32,
+  outlineSteps: d.f32,
+  _pad: d.f32,
+});
+
 const TOTAL_INSTRUCTIONS = MAX_INSTRUCTIONS;
 
 const emptyInstruction = {
@@ -205,6 +212,12 @@ export function createShader(root: TgpuRoot) {
   const pickUniforms = root.createUniform(PickUniforms, {
     objectCount: 0,
     pickPass: 0,
+  });
+  const qualityUniforms = root.createUniform(QualityUniforms, {
+    maxSteps: 48,
+    reflSteps: 24,
+    outlineSteps: 24,
+    _pad: 0,
   });
 
   const pickInstructionsBuffer = root.createReadonly(
@@ -1507,7 +1520,11 @@ export function createShader(root: TgpuRoot) {
     if (t > tFar) {
       return d.f32(RAY_MISS_T + 10.0);
     }
-    for (let i = d.f32(0.0); i < d.f32(24.0); i += d.f32(1.0)) {
+    for (
+      let i = d.f32(0.0);
+      i < qualityUniforms.$.outlineSteps;
+      i += d.f32(1.0)
+    ) {
       const p = ro + rd * t;
       const dSel = evalSelectionDist(p);
       const dist = std.abs(dSel - OUTLINE_OFFSET) - OUTLINE_BAND;
@@ -1797,7 +1814,11 @@ export function createShader(root: TgpuRoot) {
       return d.f32(100.0);
     }
     let t = bounds.x;
-    for (let i = d.f32(0.0); i < d.f32(24.0); i += d.f32(1.0)) {
+    for (
+      let i = d.f32(0.0);
+      i < qualityUniforms.$.reflSteps;
+      i += d.f32(1.0)
+    ) {
       const p = ro + rd * t;
       const dist = sdScene(p);
       t += dist;
@@ -1833,7 +1854,7 @@ export function createShader(root: TgpuRoot) {
     }
     let t = bounds.x;
     let iterations = d.f32(0.0);
-    for (let i = d.f32(0.0); i < d.f32(48.0); i += d.f32(1.0)) {
+    for (let i = d.f32(0.0); i < qualityUniforms.$.maxSteps; i += d.f32(1.0)) {
       const p = ro + rd * t;
       const dist = sdScene(p);
       iterations += 1.0;
@@ -1957,13 +1978,15 @@ export function createShader(root: TgpuRoot) {
         // Chrome: one real reflection bounce sees the scene itself.
         const R = std.reflect(rd, N);
         const reflRo = pos + N * 0.003;
-        const tRefl = rayMarchReflection(reflRo, R);
         let reflCol = envColor(R);
-        if (tRefl <= RAY_MISS_T) {
-          const pRefl = reflRo + R * tRefl;
-          const nRefl = calcNormal(pRefl);
-          // ponytail: second bounce is env-only, no third march — invisible past bounce 2
-          reflCol = envColor(std.reflect(R, nRefl)) * 0.85;
+        if (qualityUniforms.$.reflSteps > d.f32(0.0)) {
+          const tRefl = rayMarchReflection(reflRo, R);
+          if (tRefl <= RAY_MISS_T) {
+            const pRefl = reflRo + R * tRefl;
+            const nRefl = calcNormal(pRefl);
+            // ponytail: second bounce is env-only, no third march — invisible past bounce 2
+            reflCol = envColor(std.reflect(R, nRefl)) * 0.85;
+          }
         }
 
         const ndv = std.max(std.dot(N, viewDir), 0.0);
@@ -2036,5 +2059,6 @@ export function createShader(root: TgpuRoot) {
     pickInstructionsBuffer,
     pickObjectInfoBuffer,
     pickUniforms,
+    qualityUniforms,
   };
 }

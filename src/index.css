@@ -164,6 +164,65 @@ canvas {
 }
 
 /* Standalone floating pill (no .panel wrapper) */
+.floating-pill {
+  position: fixed;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  backdrop-filter: var(--blur-panel);
+  -webkit-backdrop-filter: var(--blur-panel);
+  user-select: none;
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.38),
+    0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.floating-pill--top-left {
+  top: var(--space-3);
+  left: var(--space-3);
+  gap: 12px;
+}
+
+.floating-pill--top-right {
+  top: var(--space-3);
+  right: var(--space-3);
+}
+
+.floating-pill-icon {
+  flex-shrink: 0;
+  color: var(--text-3);
+  opacity: 0.85;
+}
+
+.floating-pill-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition-fast);
+}
+
+.floating-pill-btn:hover {
+  color: var(--accent-text);
+}
+
+.floating-pill-btn .shape-btn-icon {
+  opacity: 0.85;
+}
+
 .segmented--floating {
   position: fixed;
   z-index: 10;
@@ -443,17 +502,101 @@ canvas {
   padding: 1px 6px;
 }
 
-/* ─── Render mode dropdown (top right) ───────────────────────── */
+/* ─── Quality slider (top left pill) ─────────────────────────── */
 
-.panel-render-mode {
-  top: var(--space-3);
-  right: var(--space-3);
-  height: 52px;
+.quality-track {
+  position: relative;
+  width: 118px;
+  height: 20px;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-3);
+  cursor: pointer;
+  touch-action: none;
 }
+
+.quality-track-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--border-1);
+}
+
+.quality-track-fill {
+  position: absolute;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent-strong);
+  pointer-events: none;
+  transition: width 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.quality-track:has(.quality-thumb--dragging) .quality-track-fill {
+  transition: none;
+}
+
+.quality-dot {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 2px;
+  margin-left: -1px;
+  margin-top: -1px;
+  border-radius: 999px;
+  background: var(--border-1);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.quality-thumb {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--accent-text);
+  border: 2px solid var(--accent-strong);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 2px 6px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  transition: left 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.quality-thumb--dragging {
+  transition: none;
+}
+
+.quality-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  transform: translateX(-50%) translateY(-4px);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(20, 20, 20, 0.94);
+  border: 1px solid var(--border-2);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity var(--transition-fast),
+    transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.quality-tooltip--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ─── Render mode dropdown (top right pill) ──────────────────── */
 
 .render-mode-trigger {
   gap: 6px;

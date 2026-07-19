@@ -33,10 +33,9 @@ export default function RenderModePanel() {
   const ActiveIcon = active.icon;
 
   return (
-    <div className="panel panel-render-mode" ref={rootRef}>
-      <span className="panel-label">Render mode</span>
+    <div className="floating-pill floating-pill--top-right" ref={rootRef}>
       <button
-        className="shape-btn render-mode-trigger"
+        className="floating-pill-btn render-mode-trigger"
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open}

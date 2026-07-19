@@ -31,6 +31,7 @@ import {
 } from "../store/sceneStore";
 import { useGizmoStore } from "../store/gizmoStore";
 import { useRenderStore, type RenderMode } from "../store/renderStore";
+import { QUALITY_PRESETS, dprForPreset } from "../utils/quality";
 import { clientToPickPixel, getCanvasAspect } from "./camera";
 import {
   applyScaleFactorToItem,
@@ -488,6 +489,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         pickInstructionsBuffer,
         pickObjectInfoBuffer,
         pickUniforms,
+        qualityUniforms,
       } = createShader(root);
 
       const pickFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -532,6 +534,8 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       let lastSelectedItemId: string | null = null;
       let lastRootSelected = false;
       let lastRenderMode: RenderMode | null = null;
+      let lastQuality = useRenderStore.getState().quality;
+      let targetMs = 1000 / QUALITY_PRESETS[lastQuality].fpsCap;
       let sceneGpuDirty = true;
       let pickInProgress = false;
 
@@ -1205,10 +1209,21 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
       window.addEventListener("pointerup", onPointerUp);
       canvas.addEventListener("wheel", onWheel, { passive: false });
 
+      function applyQualityPreset(qualityIndex: number) {
+        const preset = QUALITY_PRESETS[qualityIndex];
+        qualityUniforms.write({
+          maxSteps: preset.maxSteps,
+          reflSteps: preset.reflSteps,
+          outlineSteps: preset.outlineSteps,
+          _pad: 0,
+        });
+        targetMs = 1000 / preset.fpsCap;
+        updateSize();
+      }
+
       function updateSize() {
-        // ponytail: DPR 1.5 = 44% fewer pixels than 2.0, still smooths edges;
-        // upgrade path is adaptive resolution scaling on frame-time budget
-        const dpr = Math.min(window.devicePixelRatio ?? 1, 1.5);
+        const preset = QUALITY_PRESETS[useRenderStore.getState().quality];
+        const dpr = dprForPreset(preset);
         canvas!.width = canvas!.clientWidth * dpr;
         canvas!.height = canvas!.clientHeight * dpr;
         if (canvas!.width > 0 && canvas!.height > 0) {
@@ -1230,11 +1245,10 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
         });
       }
 
-      updateSize();
+      applyQualityPreset(lastQuality);
 
       const observer = new ResizeObserver(updateSize);
       observer.observe(canvas);
-      const TARGET_MS = 1000 / 60;
       let lastFrameTime = 0;
       let lastRoot: SceneRoot | null = null;
 
@@ -1314,7 +1328,7 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
           return;
         }
 
-        if (now - lastFrameTime < TARGET_MS) {
+        if (now - lastFrameTime < targetMs) {
           animFrameId = requestAnimationFrame(frame);
           return;
         }
@@ -1322,7 +1336,11 @@ export function useGpu(canvasRef: RefObject<HTMLCanvasElement | null>) {
 
         const { root: sceneRoot, selectedItemId, rootSelected } =
           useSceneStore.getState();
-        const renderMode = useRenderStore.getState().renderMode;
+        const { renderMode, quality } = useRenderStore.getState();
+        if (quality !== lastQuality) {
+          applyQualityPreset(quality);
+          lastQuality = quality;
+        }
         if (
           sceneGpuDirty ||
           sceneRoot !== lastRoot ||

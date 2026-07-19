@@ -6,6 +6,7 @@ import RightPanel from "./components/panels/RightPanel";
 import GizmoPanel from "./components/panels/GizmoPanel";
 import CommandPalette from "./components/CommandPalette";
 import RenderModePanel from "./components/panels/RenderModePanel";
+import QualityPanel from "./components/panels/QualityPanel";
 import { undoScene, redoScene } from "./store/sceneStore";
 import { useGizmoStore } from "./store/gizmoStore";
 import { usePersistence } from "./store/persistence";
@@ -74,6 +75,7 @@ export default function App() {
     <>
       <Canvas />
       <TopPanel />
+      <QualityPanel />
       <RenderModePanel />
       <LeftPanel />
       <RightPanel />
