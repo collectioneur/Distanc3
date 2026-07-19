@@ -659,7 +659,7 @@ export function createShader(root: TgpuRoot) {
     return divAccSclBy(rotated, outerScl);
   };
 
-  const evalShape = (lp: d.v3f, shapeType: d.u32, params: d.v4f): number => {
+  const evalShape = (lp: d.v3f, shapeType: number, params: d.v4f): number => {
     "use gpu";
     let result = d.f32(1e10);
     if (shapeType === d.u32(0)) {
@@ -716,7 +716,7 @@ export function createShader(root: TgpuRoot) {
   // non-uniform scale (same trick as the group transform stack).
   const evalScaledShape = (
     lp: d.v3f,
-    shapeType: d.u32,
+    shapeType: number,
     params: d.v4f,
     scale: d.v3f,
   ): number => {
@@ -733,7 +733,7 @@ export function createShader(root: TgpuRoot) {
   };
 
   // Apply a CSG operation: a = left operand, b = right operand
-  const applyOp = (a: number, b: number, opType: d.u32, k: number): number => {
+  const applyOp = (a: number, b: number, opType: number, k: number): number => {
     "use gpu";
     let result = a;
     if (opType === d.u32(0)) {
@@ -1190,8 +1190,8 @@ export function createShader(root: TgpuRoot) {
   // Evaluate SDF for an instruction range from the selection buffer.
   const evalSelectionInstructionRange = (
     p: d.v3f,
-    start: d.u32,
-    count: d.u32,
+    start: number,
+    count: number,
   ): number => {
     "use gpu";
     let s0 = d.f32(0.0);
@@ -1497,8 +1497,8 @@ export function createShader(root: TgpuRoot) {
 
   const evalPickInstructionRange = (
     p: d.v3f,
-    start: d.u32,
-    count: d.u32,
+    start: number,
+    count: number,
   ): number => {
     "use gpu";
     let s0 = d.f32(0.0);
@@ -1793,7 +1793,7 @@ export function createShader(root: TgpuRoot) {
     return s0;
   };
 
-  const resolvePickObjectId = (p: d.v3f): d.u32 => {
+  const resolvePickObjectId = (p: d.v3f): number => {
     "use gpu";
     let bestId = d.u32(0);
     let bestDist = d.f32(1e9);
