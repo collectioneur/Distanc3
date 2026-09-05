@@ -10,8 +10,6 @@ import {
   OUTLINE_BAND,
   OUTLINE_OFFSET,
   OPCODE_PUSH_SHAPE,
-  OPCODE_TRANSFORM_POP,
-  OPCODE_TRANSFORM_PUSH,
   PICK_PASS_GIZMO,
   RENDER_MODE_CHROME,
   RENDER_MODE_CLASSIC,
@@ -61,6 +59,7 @@ import {
   type RingDragState,
   type ScaleDragState,
 } from "./gizmo";
+import { bakeShape, composeGroupCtx, identityCtx, type BakeCtx } from "./bake";
 
 type GizmoGpuPickResult = {
   axis: GizmoHandle | null;
@@ -72,12 +71,14 @@ type InstructionData = {
   shapeType: number;
   opType: number;
   smoothK: number;
-  position: ReturnType<typeof d.vec3f>;
-  _pad: number;
   params: ReturnType<typeof d.vec4f>;
-  rotation: ReturnType<typeof d.vec3f>;
+  row0: ReturnType<typeof d.vec3f>;
+  factor: number;
+  row1: ReturnType<typeof d.vec3f>;
+  _pad1: number;
+  row2: ReturnType<typeof d.vec3f>;
   _pad2: number;
-  scale: ReturnType<typeof d.vec3f>;
+  offset: ReturnType<typeof d.vec3f>;
   _pad3: number;
 };
 
@@ -88,88 +89,58 @@ const EMPTY_INSTRUCTION: InstructionData = {
   shapeType: 0,
   opType: 0,
   smoothK: 0,
-  position: d.vec3f(0, 0, 0),
-  _pad: 0,
   params: d.vec4f(0, 0, 0, 0),
-  rotation: d.vec3f(0, 0, 0),
+  row0: d.vec3f(1, 0, 0),
+  factor: 0,
+  row1: d.vec3f(0, 1, 0),
+  _pad1: 0,
+  row2: d.vec3f(0, 0, 1),
   _pad2: 0,
-  scale: d.vec3f(1, 1, 1),
+  offset: d.vec3f(0, 0, 0),
   _pad3: 0,
 };
 
 const EMPTY_OBJECT_INFO: ObjectInfoData = { start: 0, count: 0 };
 
-const DEG_TO_RAD = Math.PI / 180;
-
-function pushShapeInstruction(layer: ShapeLayer, out: InstructionData[]): void {
-  const [rx, ry, rz] = layer.rotation;
+function pushShapeInstruction(
+  layer: ShapeLayer,
+  ctx: BakeCtx,
+  out: InstructionData[],
+): void {
+  const baked = bakeShape(ctx, layer.position, layer.rotation, layer.scale);
   out.push({
     opcode: OPCODE_PUSH_SHAPE,
     shapeType: SHAPE_TYPE_INT[layer.shapeType],
     opType: 0,
     smoothK: 0,
-    position: d.vec3f(layer.position[0], layer.position[1], layer.position[2]),
-    _pad: 0,
     params: d.vec4f(
       layer.params[0],
       layer.params[1],
       layer.params[2],
       layer.params[3],
     ),
-    rotation: d.vec3f(rx * DEG_TO_RAD, ry * DEG_TO_RAD, rz * DEG_TO_RAD),
+    row0: d.vec3f(baked.row0[0], baked.row0[1], baked.row0[2]),
+    factor: baked.factor,
+    row1: d.vec3f(baked.row1[0], baked.row1[1], baked.row1[2]),
+    _pad1: 0,
+    row2: d.vec3f(baked.row2[0], baked.row2[1], baked.row2[2]),
     _pad2: 0,
-    scale: d.vec3f(layer.scale[0], layer.scale[1], layer.scale[2]),
+    offset: d.vec3f(baked.offset[0], baked.offset[1], baked.offset[2]),
     _pad3: 0,
   });
 }
 
 function pushOpInstruction(op: OpType, smoothK: number, out: InstructionData[]): void {
   out.push({
+    ...EMPTY_INSTRUCTION,
     opcode: OPCODE_OP,
-    shapeType: 0,
     opType: OP_TYPE_INT[op],
     smoothK,
-    position: d.vec3f(0, 0, 0),
-    _pad: 0,
-    params: d.vec4f(0, 0, 0, 0),
-    rotation: d.vec3f(0, 0, 0),
-    _pad2: 0,
-    scale: d.vec3f(1, 1, 1),
-    _pad3: 0,
   });
 }
 
-function pushTransformPush(group: ObjectGroup, out: InstructionData[]): void {
-  const [rx, ry, rz] = group.rotation;
-  out.push({
-    opcode: OPCODE_TRANSFORM_PUSH,
-    shapeType: 0,
-    opType: 0,
-    smoothK: 0,
-    position: d.vec3f(group.position[0], group.position[1], group.position[2]),
-    _pad: 0,
-    params: d.vec4f(group.scale[0], group.scale[1], group.scale[2], 0),
-    rotation: d.vec3f(rx * DEG_TO_RAD, ry * DEG_TO_RAD, rz * DEG_TO_RAD),
-    _pad2: 0,
-    scale: d.vec3f(1, 1, 1),
-    _pad3: 0,
-  });
-}
-
-function pushTransformPop(out: InstructionData[]): void {
-  out.push({
-    opcode: OPCODE_TRANSFORM_POP,
-    shapeType: 0,
-    opType: 0,
-    smoothK: 0,
-    position: d.vec3f(0, 0, 0),
-    _pad: 0,
-    params: d.vec4f(0, 0, 0, 0),
-    rotation: d.vec3f(0, 0, 0),
-    _pad2: 0,
-    scale: d.vec3f(1, 1, 1),
-    _pad3: 0,
-  });
+function groupCtx(ctx: BakeCtx, group: ObjectGroup): BakeCtx {
+  return composeGroupCtx(ctx, group.position, group.rotation, group.scale);
 }
 
 /** Conservative shape bound radius in its own local space (rotation-invariant). */
@@ -294,21 +265,32 @@ function selectionBoundRadius(root: SceneRoot, itemId: string): number | null {
   return r;
 }
 
-function compileItems(items: SceneItem[], out: InstructionData[]): void {
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
+/**
+ * Compile items into postorder stack-machine instructions, baking `ctx` (the
+ * accumulated ancestor transform) into every shape. Returns true when at
+ * least one value was pushed; an OP is emitted only when both operands exist,
+ * so empty groups contribute nothing instead of corrupting the stack.
+ */
+function compileItems(
+  items: SceneItem[],
+  ctx: BakeCtx,
+  out: InstructionData[],
+): boolean {
+  let pushedAny = false;
+  for (const item of items) {
+    let pushed = false;
     if (item.kind === "layer") {
-      pushShapeInstruction(item, out);
-      if (i > 0) pushOpInstruction(item.op, item.smoothK, out);
-    } else {
-      if (item.items.length > 0) {
-        pushTransformPush(item, out);
-        compileItems(item.items, out);
-        pushTransformPop(out);
-      }
-      if (i > 0) pushOpInstruction(item.op, item.smoothK, out);
+      pushShapeInstruction(item, ctx, out);
+      pushed = true;
+    } else if (item.items.length > 0) {
+      pushed = compileItems(item.items, groupCtx(ctx, item), out);
+    }
+    if (pushed) {
+      if (pushedAny) pushOpInstruction(item.op, item.smoothK, out);
+      pushedAny = true;
     }
   }
+  return pushedAny;
 }
 
 function buildGpuData(root: SceneRoot): {
@@ -320,8 +302,10 @@ function buildGpuData(root: SceneRoot): {
   const objectInfos: ObjectInfoData[] = [];
 
   if (root.items.length > 0) {
-    compileItems(root.items, instructions);
-    objectInfos.push({ start: 0, count: instructions.length });
+    compileItems(root.items, identityCtx(), instructions);
+    if (instructions.length > 0) {
+      objectInfos.push({ start: 0, count: instructions.length });
+    }
   }
 
   const objectCount = objectInfos.length;
@@ -377,7 +361,7 @@ function buildSelectionGpuData(
   return { instructions, count, enabled: count > 0, usesSceneSdf: false };
 }
 
-/** Compile one scene item's CSG subtree with ancestor transforms (for selection + pick). */
+/** Compile one scene item's CSG subtree with ancestor transforms baked in (for selection + pick). */
 function compileItemSubtreeInstructions(
   root: SceneRoot,
   itemId: string,
@@ -387,24 +371,16 @@ function compileItemSubtreeInstructions(
   if (!found) return false;
   if (found.item.kind === "group" && found.item.items.length === 0) return false;
 
-  const ancestors = getAncestorGroups(root, found.container.id);
-  for (const group of ancestors) {
-    pushTransformPush(group, out);
+  let ctx = identityCtx();
+  for (const group of getAncestorGroups(root, found.container.id)) {
+    ctx = groupCtx(ctx, group);
   }
 
   if (found.item.kind === "layer") {
-    pushShapeInstruction(found.item, out);
-  } else {
-    pushTransformPush(found.item, out);
-    compileItems(found.item.items, out);
-    pushTransformPop(out);
+    pushShapeInstruction(found.item, ctx, out);
+    return true;
   }
-
-  for (let i = ancestors.length - 1; i >= 0; i--) {
-    pushTransformPop(out);
-  }
-
-  return true;
+  return compileItems(found.item.items, groupCtx(ctx, found.item), out);
 }
 
 /** Canvas pick: layers only. Groups are selected from the hierarchy panel. */
