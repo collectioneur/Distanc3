@@ -19,7 +19,7 @@ export const QUALITY_PRESETS: readonly QualityPreset[] = [
     maxSteps: 24,
     reflSteps: 0,
     outlineSteps: 12,
-    fpsCap: 30,
+    fpsCap: 60,
   },
   {
     id: "low",
@@ -28,7 +28,7 @@ export const QUALITY_PRESETS: readonly QualityPreset[] = [
     maxSteps: 32,
     reflSteps: 12,
     outlineSteps: 16,
-    fpsCap: 30,
+    fpsCap: 60,
   },
   {
     id: "medium",
