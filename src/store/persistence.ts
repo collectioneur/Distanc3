@@ -9,7 +9,7 @@ import {
 import { temporalStore } from "./sceneStore";
 
 const SCHEMA_VERSION = 4;
-const LS_KEY = "distanc3_scene";
+const LS_KEY = "d-stance_scene";
 
 export type PersistedScene = {
   v: number;
@@ -24,7 +24,9 @@ export type PersistedScene = {
  * user-editable; a zero component would divide by zero in the shader).
  */
 function normalizePersisted(s: PersistedScene): PersistedScene {
-  const fixItems = (items: { kind: string; scale?: unknown; items?: unknown }[]) => {
+  const fixItems = (
+    items: { kind: string; scale?: unknown; items?: unknown }[],
+  ) => {
     for (const item of items) {
       const valid =
         Array.isArray(item.scale) &&
@@ -33,7 +35,9 @@ function normalizePersisted(s: PersistedScene): PersistedScene {
       if (!valid) {
         item.scale = [1, 1, 1];
       } else {
-        item.scale = (item.scale as number[]).map((n) => Math.max(0.01, Math.abs(n)));
+        item.scale = (item.scale as number[]).map((n) =>
+          Math.max(0.01, Math.abs(n)),
+        );
       }
       if (item.kind === "group" && Array.isArray(item.items)) {
         fixItems(item.items as { kind: string }[]);
@@ -83,7 +87,11 @@ export function loadInitialState(): Partial<PersistedScene> {
   if (hash) {
     const fromUrl = decodeHash(hash);
     if (fromUrl) return fromUrl;
-    history.replaceState(null, "", window.location.pathname + window.location.search);
+    history.replaceState(
+      null,
+      "",
+      window.location.pathname + window.location.search,
+    );
   }
   return loadFromStorage() ?? {};
 }

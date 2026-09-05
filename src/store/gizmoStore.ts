@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 export type GizmoMode = "translate" | "rotate" | "scale";
 
-const LS_KEY = "distanc3-gizmo-mode";
+const LS_KEY = "d-stance-gizmo-mode";
 
 function loadMode(): GizmoMode {
   try {

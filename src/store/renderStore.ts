@@ -25,6 +25,6 @@ export const useRenderStore = create<RenderState>()(
           quality: Math.max(0, Math.min(QUALITY_PRESET_COUNT - 1, Math.round(q))),
         }),
     }),
-    { name: "distanc3_render_mode" },
+    { name: "d-stance_render_mode" },
   ),
 );
