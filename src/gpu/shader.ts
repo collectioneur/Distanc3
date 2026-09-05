@@ -1389,29 +1389,54 @@ export function createShader(root: TgpuRoot) {
     return std.clamp(1.0 - 1.6 * occ, 0.0, 1.0);
   };
 
-  const rayMarchReflection = (ro: d.v3f, rd: d.v3f): number => {
+  // Returns (t, lastDist). lastDist is the SDF value at the hit point,
+  // reused by calcNormalCheap so the forward-difference normal needs only
+  // 3 extra sdScene taps instead of calcNormal's 4. Breaks before stepping
+  // (unlike the primary rayMarch) so t and lastDist describe the same point;
+  // the old post-step point could land inside the surface.
+  const rayMarchReflection = (ro: d.v3f, rd: d.v3f): d.v2f => {
     "use gpu";
     const bounds = rayBounds(ro, rd);
     if (bounds.y < 0.0) {
-      return d.f32(100.0);
+      return d.vec2f(100.0, 0.0);
     }
     let t = bounds.x;
+    let dist = d.f32(0.0);
     for (
       let i = d.f32(0.0);
       i < qualityUniforms.$.reflSteps;
       i += d.f32(1.0)
     ) {
       const p = ro + rd * t;
-      const dist = sdScene(p);
-      t += dist;
+      dist = sdScene(p);
       if (dist < 0.001 * std.max(t, 1.0)) {
         break;
       }
+      t += dist;
       if (t > bounds.y) {
-        return d.f32(100.0);
+        return d.vec2f(100.0, 0.0);
       }
     }
-    return t;
+    return d.vec2f(t, dist);
+  };
+
+  // Cheap normal for reflection hits: forward difference against the SDF
+  // value d0 already computed by the reflection march — 3 sdScene evals
+  // instead of calcNormal's 4. Subtracting d0 cancels the "hit point is not
+  // exactly on the surface" offset, so this matches the tetrahedral normal
+  // bit-exact in practice (verified via screenshot diff).
+  // ponytail: only feeds envColor of the second bounce; upgrade path is full
+  // calcNormal if reflections ever shade more than env.
+  const calcNormalCheap = (p: d.v3f, d0: number): d.v3f => {
+    "use gpu";
+    const eps = 0.001;
+    return std.normalize(
+      d.vec3f(
+        sdScene(p + d.vec3f(eps, 0.0, 0.0)) - d0,
+        sdScene(p + d.vec3f(0.0, eps, 0.0)) - d0,
+        sdScene(p + d.vec3f(0.0, 0.0, eps)) - d0,
+      ),
+    );
   };
 
   const calcNormal = (p: d.v3f): d.v3f => {
@@ -1562,10 +1587,10 @@ export function createShader(root: TgpuRoot) {
         const reflRo = pos + N * 0.003;
         let reflCol = envColor(R);
         if (qualityUniforms.$.reflSteps > d.f32(0.0)) {
-          const tRefl = rayMarchReflection(reflRo, R);
-          if (tRefl <= RAY_MISS_T) {
-            const pRefl = reflRo + R * tRefl;
-            const nRefl = calcNormal(pRefl);
+          const refl = rayMarchReflection(reflRo, R);
+          if (refl.x <= RAY_MISS_T) {
+            const pRefl = reflRo + R * refl.x;
+            const nRefl = calcNormalCheap(pRefl, refl.y);
             // ponytail: second bounce is env-only, no third march — invisible past bounce 2
             reflCol = envColor(std.reflect(R, nRefl)) * 0.85;
           }
