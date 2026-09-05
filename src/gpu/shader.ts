@@ -1281,10 +1281,37 @@ export function createShader(root: TgpuRoot) {
   };
 
   const GIZMO_HIT_EPS = 0.00015;
+  // Conservative bounding-sphere radius in units of gizmo scale. Max extents:
+  // translate 0.85+0.08 (head), rotate 0.85+0.035 (tube),
+  // scale 0.85+0.07·√3 (cube corner) — all ≤ 0.98.
+  const GIZMO_BOUND_RADIUS = 1.05;
+  // Self-check (runs on CPU at shader build): gate sphere must cover every
+  // handle, otherwise the march silently clips geometry.
+  const maxGizmoExtent = Math.max(
+    GIZMO_ARROW_LEN + GIZMO_HEAD_R,
+    GIZMO_RING_MAJOR + GIZMO_RING_TUBE,
+    GIZMO_ARROW_LEN + GIZMO_SCALE_HEAD_HALF * Math.sqrt(3),
+    GIZMO_CENTER_HALF * Math.sqrt(3),
+  );
+  if (maxGizmoExtent > GIZMO_BOUND_RADIUS) {
+    throw new Error(
+      `GIZMO_BOUND_RADIUS ${GIZMO_BOUND_RADIUS} < max handle extent ${maxGizmoExtent}`,
+    );
+  }
 
   const rayMarchGizmo = (ro: d.v3f, rd: d.v3f): d.v2f => {
     "use gpu";
-    let t = d.f32(0.0);
+    // Gizmo covers a few % of the screen; skip the 32-step march everywhere else.
+    const bounds = raySphere(
+      ro,
+      rd,
+      gizmoUniforms.$.position,
+      gizmoUniforms.$.scale * GIZMO_BOUND_RADIUS,
+    );
+    if (bounds.y < 0.0) {
+      return d.vec2f(RAY_MISS_T + 1.0, 0.0);
+    }
+    let t = bounds.x;
     let hitAxis = d.f32(0.0);
     let converged = false;
     for (let i = d.f32(0.0); i < d.f32(32.0); i += d.f32(1.0)) {
@@ -1297,7 +1324,7 @@ export function createShader(root: TgpuRoot) {
         break;
       }
       t += dist * 0.85;
-      if (t > 100.0) {
+      if (t > bounds.y) {
         break;
       }
     }
