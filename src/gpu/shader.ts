@@ -56,7 +56,8 @@ export const OP_TYPE_INT = {
 // Each instruction is PUSH_SHAPE (0) or OP (1). Group/layer transforms are
 // baked on the CPU into one inverse affine map per shape (see bake.ts):
 //   q = (row0·p, row1·p, row2·p) + offset;  dist = sd(q, params) * factor
-// Layout: 4×u32/f32 header (16 B) + vec4f (16 B) + 4×(vec3f + f32) (64 B) = 96 B
+// Layout: 4×u32/f32 header (16 B) + vec4f (16 B) + 4×(vec3f + f32) (64 B)
+//         + boundCenter/Radius (16 B) = 112 B
 const Instruction = d.struct({
   opcode: d.u32, // 0=PUSH_SHAPE, 1=OP
   shapeType: d.u32, // for PUSH_SHAPE: SHAPE_TYPE_INT value
@@ -66,11 +67,13 @@ const Instruction = d.struct({
   row0: d.vec3f, // rows of the baked inverse affine matrix
   factor: d.f32, // conservative distance factor: min(scale)·min(accScl)
   row1: d.vec3f,
-  _pad1: d.f32,
+  unionOnly: d.u32, // 1 = every CSG op above this shape is hard union
   row2: d.vec3f,
   _pad2: d.f32,
   offset: d.vec3f, // baked translation: M·(b − shapePos)
   _pad3: d.f32,
+  boundCenter: d.vec3f, // world-space bounding sphere of this shape
+  boundRadius: d.f32,
 });
 
 const ObjectInfo = d.struct({
@@ -142,11 +145,13 @@ const emptyInstruction = {
   row0: d.vec3f(1, 0, 0),
   factor: 0,
   row1: d.vec3f(0, 1, 0),
-  _pad1: 0,
+  unionOnly: 0,
   row2: d.vec3f(0, 0, 1),
   _pad2: 0,
   offset: d.vec3f(0, 0, 0),
   _pad3: 0,
+  boundCenter: d.vec3f(0, 0, 0),
+  boundRadius: 0,
 };
 
 const emptyObjectInfo = { start: 0, count: 0 };
@@ -160,6 +165,11 @@ const OUTLINE_GRAD_HI = 1.45;
 const OUTLINE_EDGE_LO = 0.25;
 const OUTLINE_EDGE_HI = 0.85;
 const RAY_MISS_T = 50.0;
+/**
+ * Sphere-skip only above this. March hits at `0.0001*t` / reflection `0.001*t`;
+ * returning a smaller sphereDist paints the bounding sphere as the surface.
+ */
+const SHAPE_BOUND_SKIP = 0.15;
 /** Surface tie epsilon for pick — prefer smaller CSG subtree (more specific item). */
 const PICK_TIE_EPS = 0.002;
 
@@ -709,6 +719,35 @@ export function createShader(root: TgpuRoot) {
     return result;
   };
 
+  // Sphere dist is a conservative SDF lower bound. Safe to substitute when
+  // every CSG op above this shape is hard union (min): zero-set unchanged.
+  // Subtract/intersect/smooth paths keep a full eval (CPU sets unionOnly=0).
+  // Skip only when sphereDist > SHAPE_BOUND_SKIP — otherwise the march hit
+  // test (`dist < k*t`) treats the bounding sphere as the surface.
+  const evalPushedShape = (
+    p: d.v3f,
+    unionOnly: number,
+    boundCenter: d.v3f,
+    boundRadius: number,
+    row0: d.v3f,
+    row1: d.v3f,
+    row2: d.v3f,
+    offset: d.v3f,
+    shapeType: number,
+    params: d.v4f,
+    factor: number,
+  ): number => {
+    "use gpu";
+    if (unionOnly === d.u32(1)) {
+      const sphereDist = std.length(p - boundCenter) - boundRadius;
+      if (sphereDist > SHAPE_BOUND_SKIP) {
+        return sphereDist;
+      }
+    }
+    const q = bakedLocalPoint(p, row0, row1, row2, offset);
+    return evalShape(q, shapeType, params) * factor;
+  };
+
   // ── Stack-machine sdScene ─────────────────────────────────────────────────
   //
   // The JS side compiles each CSG tree into a postorder instruction sequence
@@ -751,14 +790,19 @@ export function createShader(root: TgpuRoot) {
         const instr = instructionsBuffer.$[i];
 
         if (instr.opcode === d.u32(0)) {
-          const q = bakedLocalPoint(
+          const val = evalPushedShape(
             p,
+            instr.unionOnly,
+            instr.boundCenter,
+            instr.boundRadius,
             instr.row0,
             instr.row1,
             instr.row2,
             instr.offset,
+            instr.shapeType,
+            instr.params,
+            instr.factor,
           );
-          const val = evalShape(q, instr.shapeType, instr.params) * instr.factor;
           if (sp === d.u32(0)) s0 = val;
           else if (sp === d.u32(1)) s1 = val;
           else if (sp === d.u32(2)) s2 = val;
@@ -861,14 +905,19 @@ export function createShader(root: TgpuRoot) {
       const instr = selectionInstructionsBuffer.$[i];
 
       if (instr.opcode === d.u32(0)) {
-        const q = bakedLocalPoint(
+        const val = evalPushedShape(
           p,
+          instr.unionOnly,
+          instr.boundCenter,
+          instr.boundRadius,
           instr.row0,
           instr.row1,
           instr.row2,
           instr.offset,
+          instr.shapeType,
+          instr.params,
+          instr.factor,
         );
-        const val = evalShape(q, instr.shapeType, instr.params) * instr.factor;
         if (sp === d.u32(0)) s0 = val;
         else if (sp === d.u32(1)) s1 = val;
         else if (sp === d.u32(2)) s2 = val;
@@ -947,14 +996,19 @@ export function createShader(root: TgpuRoot) {
       const instr = pickInstructionsBuffer.$[i];
 
       if (instr.opcode === d.u32(0)) {
-        const q = bakedLocalPoint(
+        const val = evalPushedShape(
           p,
+          instr.unionOnly,
+          instr.boundCenter,
+          instr.boundRadius,
           instr.row0,
           instr.row1,
           instr.row2,
           instr.offset,
+          instr.shapeType,
+          instr.params,
+          instr.factor,
         );
-        const val = evalShape(q, instr.shapeType, instr.params) * instr.factor;
         if (sp === d.u32(0)) s0 = val;
         else if (sp === d.u32(1)) s1 = val;
         else if (sp === d.u32(2)) s2 = val;
@@ -1467,13 +1521,15 @@ export function createShader(root: TgpuRoot) {
       iterations += 1.0;
       t += dist;
       if (dist < 0.0001 * std.max(t, 1.0)) {
-        break;
+        return d.vec2f(t, iterations);
       }
       if (t > bounds.y) {
         return d.vec2f(RAY_MISS_T + 10.0, iterations);
       }
     }
-    return d.vec2f(t, iterations);
+    // Out of steps without a surface: miss. Treating this as a hit paints a
+    // noisy halo (potato = 24 steps, grazing rays never converge).
+    return d.vec2f(RAY_MISS_T + 10.0, iterations);
   };
 
   const rot2D = (angle: number): d.m2x2f => {

@@ -43,6 +43,7 @@ import {
   scaleFactorFromScreenDrag,
   getGizmoWorldPosition,
   getItemAncestorGroups,
+  itemLocalToWorldPosition,
   GIZMO_MODE_ROTATE,
   GIZMO_MODE_SCALE,
   GIZMO_MODE_TRANSLATE,
@@ -75,11 +76,13 @@ type InstructionData = {
   row0: ReturnType<typeof d.vec3f>;
   factor: number;
   row1: ReturnType<typeof d.vec3f>;
-  _pad1: number;
+  unionOnly: number;
   row2: ReturnType<typeof d.vec3f>;
   _pad2: number;
   offset: ReturnType<typeof d.vec3f>;
   _pad3: number;
+  boundCenter: ReturnType<typeof d.vec3f>;
+  boundRadius: number;
 };
 
 type ObjectInfoData = { start: number; count: number };
@@ -93,21 +96,33 @@ const EMPTY_INSTRUCTION: InstructionData = {
   row0: d.vec3f(1, 0, 0),
   factor: 0,
   row1: d.vec3f(0, 1, 0),
-  _pad1: 0,
+  unionOnly: 0,
   row2: d.vec3f(0, 0, 1),
   _pad2: 0,
   offset: d.vec3f(0, 0, 0),
   _pad3: 0,
+  boundCenter: d.vec3f(0, 0, 0),
+  boundRadius: 0,
 };
+
+/** Slack so a tight primitive sphere never skips through on float error. */
+const SHAPE_BOUND_EPS = 1e-3;
 
 const EMPTY_OBJECT_INFO: ObjectInfoData = { start: 0, count: 0 };
 
 function pushShapeInstruction(
   layer: ShapeLayer,
   ctx: BakeCtx,
+  ancestors: ObjectGroup[],
+  unionOnly: boolean,
   out: InstructionData[],
 ): void {
   const baked = bakeShape(ctx, layer.position, layer.rotation, layer.scale);
+  const center = itemLocalToWorldPosition(layer.position, ancestors);
+  let radius = shapeBoundRadius(layer);
+  for (const group of ancestors) {
+    radius *= maxAbsScale(group);
+  }
   out.push({
     opcode: OPCODE_PUSH_SHAPE,
     shapeType: SHAPE_TYPE_INT[layer.shapeType],
@@ -122,11 +137,13 @@ function pushShapeInstruction(
     row0: d.vec3f(baked.row0[0], baked.row0[1], baked.row0[2]),
     factor: baked.factor,
     row1: d.vec3f(baked.row1[0], baked.row1[1], baked.row1[2]),
-    _pad1: 0,
+    unionOnly: unionOnly ? 1 : 0,
     row2: d.vec3f(baked.row2[0], baked.row2[1], baked.row2[2]),
     _pad2: 0,
     offset: d.vec3f(baked.offset[0], baked.offset[1], baked.offset[2]),
     _pad3: 0,
+    boundCenter: d.vec3f(center[0], center[1], center[2]),
+    boundRadius: radius + SHAPE_BOUND_EPS,
   });
 }
 
@@ -265,32 +282,67 @@ function selectionBoundRadius(root: SceneRoot, itemId: string): number | null {
   return r;
 }
 
+function itemContributes(item: SceneItem): boolean {
+  if (item.kind === "layer") return true;
+  for (const child of item.items) {
+    if (itemContributes(child)) return true;
+  }
+  return false;
+}
+
 /**
  * Compile items into postorder stack-machine instructions, baking `ctx` (the
  * accumulated ancestor transform) into every shape. Returns true when at
  * least one value was pushed; an OP is emitted only when both operands exist,
  * so empty groups contribute nothing instead of corrupting the stack.
+ *
+ * `unionOnlyAbove` is true when every CSG op from this list's result to the
+ * stream root is hard union. A shape then also needs every op that consumes
+ * it inside this list to be union — otherwise the shader must full-eval
+ * (sphere dist is a lower bound; only min() keeps the zero-set identical).
  */
 function compileItems(
   items: SceneItem[],
   ctx: BakeCtx,
+  ancestors: ObjectGroup[],
+  unionOnlyAbove: boolean,
   out: InstructionData[],
 ): boolean {
-  let pushedAny = false;
+  const contributing: SceneItem[] = [];
   for (const item of items) {
-    let pushed = false;
-    if (item.kind === "layer") {
-      pushShapeInstruction(item, ctx, out);
-      pushed = true;
-    } else if (item.items.length > 0) {
-      pushed = compileItems(item.items, groupCtx(ctx, item), out);
-    }
-    if (pushed) {
-      if (pushedAny) pushOpInstruction(item.op, item.smoothK, out);
-      pushedAny = true;
-    }
+    if (itemContributes(item)) contributing.push(item);
   }
-  return pushedAny;
+  if (contributing.length === 0) return false;
+
+  for (let i = 0; i < contributing.length; i++) {
+    const item = contributing[i];
+    let unionOnly = unionOnlyAbove;
+    if (unionOnly) {
+      if (i > 0 && item.op !== "union") unionOnly = false;
+      if (unionOnly) {
+        for (let j = i + 1; j < contributing.length; j++) {
+          if (contributing[j].op !== "union") {
+            unionOnly = false;
+            break;
+          }
+        }
+      }
+    }
+
+    if (item.kind === "layer") {
+      pushShapeInstruction(item, ctx, ancestors, unionOnly, out);
+    } else {
+      compileItems(
+        item.items,
+        groupCtx(ctx, item),
+        [...ancestors, item],
+        unionOnly,
+        out,
+      );
+    }
+    if (i > 0) pushOpInstruction(item.op, item.smoothK, out);
+  }
+  return true;
 }
 
 function buildGpuData(root: SceneRoot): {
@@ -302,7 +354,7 @@ function buildGpuData(root: SceneRoot): {
   const objectInfos: ObjectInfoData[] = [];
 
   if (root.items.length > 0) {
-    compileItems(root.items, identityCtx(), instructions);
+    compileItems(root.items, identityCtx(), [], true, instructions);
     if (instructions.length > 0) {
       objectInfos.push({ start: 0, count: instructions.length });
     }
@@ -371,17 +423,156 @@ function compileItemSubtreeInstructions(
   if (!found) return false;
   if (found.item.kind === "group" && found.item.items.length === 0) return false;
 
+  const ancestors = getAncestorGroups(root, found.container.id);
   let ctx = identityCtx();
-  for (const group of getAncestorGroups(root, found.container.id)) {
+  for (const group of ancestors) {
     ctx = groupCtx(ctx, group);
   }
 
   if (found.item.kind === "layer") {
-    pushShapeInstruction(found.item, ctx, out);
+    pushShapeInstruction(found.item, ctx, ancestors, true, out);
     return true;
   }
-  return compileItems(found.item.items, groupCtx(ctx, found.item), out);
+  return compileItems(
+    found.item.items,
+    groupCtx(ctx, found.item),
+    [...ancestors, found.item],
+    true,
+    out,
+  );
 }
+
+function vec3xyz(v: ReturnType<typeof d.vec3f>): [number, number, number] {
+  return [v.x, v.y, v.z];
+}
+
+function assertNear(got: number, want: number, label: string): void {
+  if (Math.abs(got - want) > 1e-5) {
+    throw new Error(`shape bound gate: ${label} got=${got} want=${want}`);
+  }
+}
+
+function testSphere(
+  id: string,
+  position: [number, number, number],
+  op: OpType = "union",
+): ShapeLayer {
+  return {
+    kind: "layer",
+    id,
+    shapeType: "sphere",
+    name: id,
+    position,
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    params: [0.5, 0, 0, 0],
+    op,
+    smoothK: 0,
+  };
+}
+
+function compileFlags(items: SceneItem[]): InstructionData[] {
+  const out: InstructionData[] = [];
+  compileItems(items, identityCtx(), [], true, out);
+  return out.filter((instr) => instr.opcode === OPCODE_PUSH_SHAPE);
+}
+
+/** Flags + world sphere. Runs once at import (same convention as bake.ts). */
+function assertShapeBoundGate(): void {
+  const unioned = compileFlags([
+    testSphere("a", [2, 0, 0]),
+    testSphere("b", [-2, 0, 0], "union"),
+  ]);
+  if (unioned.length !== 2) {
+    throw new Error(`shape bound gate: expected 2 union shapes, got ${unioned.length}`);
+  }
+  if (unioned[0].unionOnly !== 1 || unioned[1].unionOnly !== 1) {
+    throw new Error("shape bound gate: hard-union siblings must set unionOnly");
+  }
+  const [ax, ay, az] = vec3xyz(unioned[0].boundCenter);
+  assertNear(ax, 2, "union a.x");
+  assertNear(ay, 0, "union a.y");
+  assertNear(az, 0, "union a.z");
+  assertNear(unioned[0].boundRadius, 0.5 + SHAPE_BOUND_EPS, "union a radius");
+
+  const mixed = compileFlags([
+    testSphere("a", [0, 0, 0]),
+    testSphere("b", [3, 0, 0], "union"),
+    testSphere("c", [0, 3, 0], "subtract"),
+  ]);
+  if (mixed.some((instr) => instr.unionOnly !== 0)) {
+    throw new Error("shape bound gate: subtract anywhere above must clear unionOnly");
+  }
+
+  const sUnioned = compileFlags([
+    testSphere("a", [0, 0, 0]),
+    testSphere("b", [1, 0, 0], "sUnion"),
+  ]);
+  if (sUnioned.some((instr) => instr.unionOnly !== 0)) {
+    throw new Error("shape bound gate: sUnion must clear unionOnly");
+  }
+
+  const group: ObjectGroup = {
+    kind: "group",
+    id: "g",
+    name: "g",
+    position: [1, 0, 0],
+    rotation: [0, 0, 0],
+    scale: [2, 2, 2],
+    op: "union",
+    smoothK: 0,
+    items: [testSphere("inner", [0.5, 0, 0])],
+  };
+  const nested = compileFlags([group]);
+  if (nested.length !== 1 || nested[0].unionOnly !== 1) {
+    throw new Error("shape bound gate: scaled group child should stay unionOnly");
+  }
+  const [nx, ny, nz] = vec3xyz(nested[0].boundCenter);
+  assertNear(nx, 2, "group child x");
+  assertNear(ny, 0, "group child y");
+  assertNear(nz, 0, "group child z");
+  assertNear(nested[0].boundRadius, 1 + SHAPE_BOUND_EPS, "group child radius");
+
+  const subtractGroup: ObjectGroup = {
+    ...group,
+    id: "sg",
+    items: [testSphere("u0", [0, 0, 0]), testSphere("u1", [1, 0, 0], "union")],
+  };
+  const underSubtract = compileFlags([
+    testSphere("base", [0, 0, 0]),
+    { ...subtractGroup, op: "subtract" },
+  ]);
+  if (underSubtract.some((instr) => instr.unionOnly !== 0)) {
+    throw new Error("shape bound gate: subtract-group subtree must full-eval");
+  }
+
+  const innerSub: ObjectGroup = {
+    kind: "group",
+    id: "is",
+    name: "is",
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    op: "union",
+    smoothK: 0,
+    items: [testSphere("a", [0, 0, 0]), testSphere("b", [1, 0, 0], "subtract")],
+  };
+  const inner = compileFlags([
+    innerSub,
+    testSphere("c", [2, 0, 0], "union"),
+  ]);
+  if (inner.length !== 3) {
+    throw new Error(`shape bound gate: expected 3 inner-sub shapes, got ${inner.length}`);
+  }
+  if (inner[0].unionOnly !== 0 || inner[1].unionOnly !== 0) {
+    throw new Error("shape bound gate: inner subtract must clear operand flags");
+  }
+  if (inner[2].unionOnly !== 1) {
+    throw new Error("shape bound gate: union sibling of subtract-group stays unionOnly");
+  }
+}
+
+assertShapeBoundGate();
 
 /** Canvas pick: layers only. Groups are selected from the hierarchy panel. */
 function collectPickableLayerIds(items: SceneItem[], out: string[]): void {
