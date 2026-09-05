@@ -152,6 +152,24 @@ canvas {
   padding: 0 var(--space-4);
 }
 
+.wordmark {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 550;
+  letter-spacing: -0.03em;
+  color: var(--text-3);
+  line-height: 1;
+  white-space: nowrap;
+  padding: 0 2px;
+}
+
+.wordmark-dot {
+  display: inline-block;
+  margin: 0 0.02em;
+  color: var(--text-4);
+  font-weight: 500;
+}
+
 /* ─── Segmented control (gizmo mode) ─────────────────────────── */
 
 .segmented {
@@ -170,7 +188,8 @@ canvas {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 10px;
+  height: 34px;
+  padding: 0 18px;
   border: 1px solid var(--border-1);
   border-radius: 999px;
   background: var(--bg-panel);
@@ -182,28 +201,23 @@ canvas {
     0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
-.floating-pill--top-left {
-  top: var(--space-3);
-  left: var(--space-3);
-  gap: 12px;
-}
-
 .floating-pill--top-right {
   top: var(--space-3);
   right: var(--space-3);
 }
 
-.floating-pill-icon {
-  flex-shrink: 0;
-  color: var(--text-3);
-  opacity: 0.85;
+.render-mode {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 100%;
 }
 
 .floating-pill-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
+  padding: 6px 0;
   border: none;
   border-radius: 999px;
   background: none;
@@ -514,6 +528,13 @@ canvas {
   touch-action: none;
 }
 
+.quality-rail {
+  position: absolute;
+  inset: 0 6px;
+  display: flex;
+  align-items: center;
+}
+
 .quality-track-line {
   position: absolute;
   left: 0;
@@ -681,7 +702,6 @@ canvas {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 6px 0;
 }
 
 .scene-list .react-arborist {
@@ -720,8 +740,8 @@ canvas {
   flex-shrink: 0;
 }
 
-.scene-object--root {
-  margin-left: 0;
+.scene-item--root .scene-item-name {
+  font-weight: 600;
 }
 
 .scene-list::-webkit-scrollbar {
@@ -882,15 +902,16 @@ canvas {
 }
 
 .prop-label {
-  width: 56px;
+  width: auto;
   font-size: var(--text-sm);
   color: var(--text-3);
   flex-shrink: 0;
-  text-align: right;
+  text-align: left;
 }
 
 .prop-input {
-  flex: 1;
+  flex: none;
+  width: 104px;
   background: var(--bg-input);
   border: 1px solid var(--border-2);
   border-radius: 5px;
@@ -1077,31 +1098,9 @@ canvas {
 
 /* ─── Scene object (left panel tree nodes) ───────────────────── */
 
-.scene-object {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-.scene-object-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px var(--space-2) 7px 10px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.scene-object-header:hover:not(.scene-item--selected) {
-  background: var(--bg-hover);
-}
-
-.scene-object-header.scene-item--selected {
-  background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-
 .scene-object-collapse {
   flex-shrink: 0;
-  width: 16px;
+  width: 20px;
   height: 16px;
   border: none;
   background: none;
@@ -1116,21 +1115,6 @@ canvas {
 
 .scene-object-collapse:hover {
   color: rgba(255, 255, 255, 0.7);
-}
-
-.scene-object-name {
-  flex: 1;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  letter-spacing: 0.01em;
-}
-
-.scene-object-nodes {
-  padding-bottom: var(--space-1);
 }
 
 .scene-object-empty {
@@ -1207,6 +1191,7 @@ canvas {
 
 /* Select input inside right panel */
 .prop-select {
+  width: 132px;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,0.3)'/%3E%3C/svg%3E");
   background-repeat: no-repeat;

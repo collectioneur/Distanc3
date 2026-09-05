@@ -75,8 +75,11 @@ export default function App() {
     <>
       <Canvas />
       <TopPanel />
-      <QualityPanel />
-      <RenderModePanel />
+      <div className="floating-pill floating-pill--top-right">
+        <QualityPanel />
+        <div className="top-panel-divider" aria-hidden />
+        <RenderModePanel />
+      </div>
       <LeftPanel />
       <RightPanel />
       <GizmoPanel />

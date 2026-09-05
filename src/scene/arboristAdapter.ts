@@ -14,10 +14,10 @@ import {
 
 export type ArboristNode = {
   id: string;
-  kind: "layer" | "group";
+  kind: "layer" | "group" | "root";
   name: string;
   shapeType?: ShapeType;
-  op: OpType;
+  op?: OpType;
   children?: ArboristNode[];
 };
 
@@ -45,8 +45,19 @@ export function rootItemsToArborist(items: SceneItem[]): ArboristNode[] {
   return items.map(sceneItemToArborist);
 }
 
+export function sceneRootToArborist(root: SceneRoot): ArboristNode[] {
+  return [
+    {
+      id: root.id,
+      kind: "root",
+      name: root.name,
+      children: root.items.map(sceneItemToArborist),
+    },
+  ];
+}
+
 export function arboristChildrenAccessor(node: ArboristNode): readonly ArboristNode[] | null {
-  if (node.kind === "group") return node.children ?? [];
+  if (node.kind === "group" || node.kind === "root") return node.children ?? [];
   return null;
 }
 
@@ -204,7 +215,8 @@ export function canDropAt(
 ): boolean {
   const targetParentId = parentId ?? root.id;
 
-  if (!isRootParent && parentData?.kind === "layer") return false;
+  if (isRootParent) return false;
+  if (parentData?.kind === "layer") return false;
   if (!findContainer(root, targetParentId)) return false;
 
   for (const dragId of dragIds) {

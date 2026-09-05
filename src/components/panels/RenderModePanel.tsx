@@ -33,7 +33,7 @@ export default function RenderModePanel() {
   const ActiveIcon = active.icon;
 
   return (
-    <div className="floating-pill floating-pill--top-right" ref={rootRef}>
+    <div className="render-mode" ref={rootRef}>
       <button
         className="floating-pill-btn render-mode-trigger"
         onClick={() => setOpen((v) => !v)}

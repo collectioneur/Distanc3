@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from "react";
-import { Signal } from "lucide-react";
 import { useRenderStore } from "../../store/renderStore";
 import {
   QUALITY_PRESETS,
@@ -7,9 +6,12 @@ import {
   stopFraction,
 } from "../../utils/quality";
 
+const THUMB = 12;
+
 function fractionFromClientX(clientX: number, rect: DOMRect): number {
-  if (rect.width <= 0) return 0;
-  return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  const usable = rect.width - THUMB;
+  if (usable <= 0) return 0;
+  return Math.max(0, Math.min(1, (clientX - rect.left - THUMB / 2) / usable));
 }
 
 export default function QualityPanel() {
@@ -72,26 +74,25 @@ export default function QualityPanel() {
   const showTooltip = hovering || dragging;
 
   return (
-    <div className="floating-pill floating-pill--top-left">
-      <Signal size={14} className="floating-pill-icon" aria-hidden />
-      <div
-        ref={trackRef}
-        className="quality-track"
-        role="slider"
-        aria-label="Render quality"
-        aria-valuemin={0}
-        aria-valuemax={QUALITY_PRESETS.length - 1}
-        aria-valuenow={quality}
-        aria-valuetext={activePreset.label}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onPointerEnter={() => setHovering(true)}
-        onPointerLeave={() => {
-          setHovering(false);
-        }}
-      >
+    <div
+      ref={trackRef}
+      className="quality-track"
+      role="slider"
+      aria-label="Render quality"
+      aria-valuemin={0}
+      aria-valuemax={QUALITY_PRESETS.length - 1}
+      aria-valuenow={quality}
+      aria-valuetext={activePreset.label}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onPointerEnter={() => setHovering(true)}
+      onPointerLeave={() => {
+        setHovering(false);
+      }}
+    >
+      <div className="quality-rail">
         <div className="quality-track-line" aria-hidden />
         <div
           className="quality-track-fill"

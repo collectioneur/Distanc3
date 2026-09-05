@@ -25,6 +25,14 @@ export default function TopPanel() {
 
   return (
     <div className="panel panel-top">
+      <span className="wordmark" aria-label="d-stance">
+        d
+        <span className="wordmark-dot" aria-hidden="true">
+          -
+        </span>
+        stance
+      </span>
+      <div className="top-panel-divider" />
       <div className="top-panel-history">
         <button
           className="history-btn"
