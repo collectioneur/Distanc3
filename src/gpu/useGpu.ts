@@ -1,5 +1,5 @@
 import { useEffect, type RefObject } from "react";
-import tgpu, { d } from "typegpu";
+import { tgpu, d } from "typegpu";
 import {
   createShader,
   MAX_GPU_OBJECTS,

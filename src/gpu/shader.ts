@@ -1,4 +1,4 @@
-import tgpu, { d, std } from "typegpu";
+import { tgpu, d, std } from "typegpu";
 import { fullScreenTriangle } from "typegpu/common";
 import {
   MAX_GPU_OBJECTS,

@@ -19,7 +19,7 @@
     "react-arborist": "^3.8.0",
     "react-dom": "^19.0.0",
     "shiki": "^4.3.1",
-    "typegpu": "^0.11.4",
+    "typegpu": "^0.12.4",
     "zundo": "^2.3.0",
     "zustand": "^5.0.13"
   },
@@ -29,7 +29,7 @@
     "@vitejs/plugin-react": "^4.5.2",
     "@webgpu/types": "^0.1.70",
     "typescript": "npm:tsover@~5.9.13",
-    "unplugin-typegpu": "^0.11.3",
+    "unplugin-typegpu": "^0.12.3",
     "vite": "^6.3.5"
   },
   "overrides": {
