@@ -165,8 +165,16 @@ const OUTLINE_GRAD_HI = 1.45;
 const OUTLINE_EDGE_LO = 0.25;
 const OUTLINE_EDGE_HI = 0.85;
 const RAY_MISS_T = 50.0;
+/** In-loop hit: `dist < HIT_EPS * max(t,1)`. Same scale as the reflection march. */
+const HIT_EPS = 0.001;
 /**
- * Sphere-skip only above this. March hits at `0.0001*t` / reflection `0.001*t`;
+ * Out-of-steps leftover. Grazing rays on potato never reach HIT_EPS; accepting
+ * any leftover paints a noisy halo. This is "already hugging the surface".
+ * ponytail: inflates the silhouette by ~REST_HIT_EPS; upgrade is pixel-radius.
+ */
+const REST_HIT_EPS = 0.01;
+/**
+ * Sphere-skip only above this. March hits at `HIT_EPS*t` / leftover `REST_HIT_EPS`;
  * returning a smaller sphereDist paints the bounding sphere as the surface.
  */
 const SHAPE_BOUND_SKIP = 0.15;
@@ -1515,20 +1523,22 @@ export function createShader(root: TgpuRoot) {
     }
     let t = bounds.x;
     let iterations = d.f32(0.0);
+    let dist = d.f32(0.0);
     for (let i = d.f32(0.0); i < qualityUniforms.$.maxSteps; i += d.f32(1.0)) {
       const p = ro + rd * t;
-      const dist = sdScene(p);
+      dist = sdScene(p);
       iterations += 1.0;
       t += dist;
-      if (dist < 0.0001 * std.max(t, 1.0)) {
+      if (dist < HIT_EPS * std.max(t, 1.0)) {
         return d.vec2f(t, iterations);
       }
       if (t > bounds.y) {
         return d.vec2f(RAY_MISS_T + 10.0, iterations);
       }
     }
-    // Out of steps without a surface: miss. Treating this as a hit paints a
-    // noisy halo (potato = 24 steps, grazing rays never converge).
+    if (dist < REST_HIT_EPS) {
+      return d.vec2f(t, iterations);
+    }
     return d.vec2f(RAY_MISS_T + 10.0, iterations);
   };
 
