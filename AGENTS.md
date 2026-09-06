@@ -10,7 +10,7 @@ Agents break this repo by desyncing **cross-file contracts**, not by missing a T
 
 | Touching | Read first |
 |---|---|
-| TypeGPU / `"use gpu"` | `.agents/skills/typegpu`. Never guess APIs. |
+| TypeGPU / `"use gpu"` | `.agents/skills/typegpu`. Never guess APIs. After GPU edits: `npm run inspect:gpu`. |
 | New or changed primitive | `src/store/sceneStore.ts` + `src/gpu/shader.ts` (`SHAPE_TYPE_INT`, `sd*`, dispatch switch) + `src/utils/generateSdfCode.ts` + `src/utils/commands.ts` |
 | Transforms, gizmo, scale | `src/gpu/bake.ts` (composition order), `src/gpu/gizmo.ts` |
 | Tree / DnD / add / remove | `src/scene/arboristAdapter.ts`, `countInstructions`, caps in `sceneStore.ts` |
@@ -137,7 +137,7 @@ Pitfalls:
 
 1. `npx tsc -b` (same check as `npm run build`).
 2. If you touched bake / quality / persist / instruction packing / shape registry: keep or add a tiny import-time assert in that module (see `assertBakeParity`, `assertQualityInvariants`). There is no `npm test` yet.
-3. GPU files (`shader.ts`, `bake.ts`, `useGpu.ts`): confirm the canvas is not black and a known scene still raymarches. `tsc` does not compile WGSL.
+3. GPU files (`shader.ts`, `bake.ts`, `useGpu.ts`): `npm run inspect:gpu` (Chromium/WebGPU compiles the raymarch pipeline). `tsc` does not compile WGSL. MCP tool: `typegpu_inspector` → `inspect_typegpu` on `src/gpu/shader.inspect.ts`. Then confirm the canvas is not black.
 4. UI: exercise the changed flow in the browser (click/type/drag). Check the other surfaces that read the same store (tree, inspector, gizmo, code export, hash after reload).
 5. New persist field: load an old `v: 4` blob and a blob missing the field.
 
